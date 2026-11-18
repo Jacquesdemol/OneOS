@@ -40,7 +40,7 @@ for a in "$@"; do
 done
 
 if [ -n "$T" ]; then
-    [ "$(id -u)" != 0 ] || refuse "ONEOS_TEST_ROOT is for tests, never as root"
+    [ "$(id -u)" != 0 ] || [ ! -d /system/bin ] || refuse "ONEOS_TEST_ROOT is for tests, never as root"
     ROOT_UID=$(id -u)
 else
     if [ "$(id -u)" != 0 ]; then

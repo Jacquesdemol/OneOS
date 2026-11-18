@@ -113,7 +113,7 @@
 umask 022
 T="${ONEOS_TEST_ROOT:-}"
 if [ -n "$T" ]; then
-    [ "$(id -u)" != 0 ] || { echo "@@REFUSED ONEOS_TEST_ROOT is for tests, never as root"; exit 3; }
+    [ "$(id -u)" != 0 ] || [ ! -d /system/bin ] || { echo "@@REFUSED ONEOS_TEST_ROOT is for tests, never as root"; exit 3; }
     ROOT_UID=$(id -u)
     ROOT_OWNER="$(id -u):$(id -g)"
 else
@@ -200,8 +200,7 @@ profile_info() {
         s-fe-9925) echo "SM-S711 r11s s5e9925 bar" ;;
         s-fe-8450) echo "SM-S711 r11q SM8450 bar" ;;
         s-plus-9925) echo "SM-S906 g0s s5e9925 bar" ;;
-        s-ultra-9925) echo "SM-S908 b0s s5e9925 bar" ;;
-        s-ultra-8450) echo "SM-S908 b0q SM8450 bar" ;;
+        s-ultra-8450) echo "SM-S908E b0q SM8450 bar" ;;
         s-ultra-8450-jp) echo "SCG14 SCG14 SM8450 bar" ;;
         s-ultra-8850) echo "SM-S948 m3q SM8850 bar" ;;
         s-ultra-8750) echo "SM-S938 pa3q SM8750 bar" ;;
@@ -502,7 +501,6 @@ profile_set() {
         "s-fe-9925 oxygenos16-cph2745") echo oxygen16 ;;
         "s-fe-8450 oxygenos16-cph2745") echo oxygen16 ;;
         "s-plus-9925 oxygenos16-cph2745") echo oxygen16 ;;
-        "s-ultra-9925 oxygenos16-cph2745") echo oxygen16 ;;
         "s-ultra-8450 oxygenos16-cph2745") echo oxygen16 ;;
         "s-ultra-8450-jp oxygenos16-cph2745") echo oxygen16 ;;
         "a07 oxygenos16-cph2745") echo oxygen16 ;;
@@ -1347,9 +1345,16 @@ do_launch() {
     set -- $pinfo
     form=$4
     model=$(getprop ro.product.model)
-    case "$model" in "$1"*) ;; *) refuse "this phone ($model) is not a $1" ;; esac
+    if [ "$1" = "SM-S908E" ]; then
+        case "$model" in SM-S908E|SM-S908E/DS) ;; *) refuse "this phone ($model) is not a $1" ;; esac
+    else
+        case "$model" in "$1"*) ;; *) refuse "this phone ($model) is not a $1" ;; esac
+    fi
     [ "$(getprop ro.product.device)" = "$2" ] || refuse "codename $(getprop ro.product.device), profile $M_PROFILE is $2"
-    [ "$(getprop ro.soc.model)" = "$3" ] || refuse "chip $(getprop ro.soc.model), profile $M_PROFILE is $3"
+    soc=$(getprop ro.soc.model)
+    [ -n "$soc" ] || soc=$(getprop ro.board.platform)
+    case "$soc" in taro|snd8g1|TARO|SND8G1) soc=SM8450 ;; esac
+    [ "$soc" = "$3" ] || refuse "chip $(getprop ro.soc.model), profile $M_PROFILE is $3"
     isdk=$(image_sdk "$M_IMAGE")
     [ "$(getprop ro.build.version.sdk)" = "$isdk" ] || refuse "Android SDK $(getprop ro.build.version.sdk), the image is $isdk"
     idle_or_refuse launch

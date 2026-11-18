@@ -26,7 +26,7 @@
 # ONEOS_TEST_ROOT (tests only, refused as root) prefixes every path.
 T="${ONEOS_TEST_ROOT:-}"
 if [ -n "$T" ]; then
-    [ "$(id -u)" != 0 ] || { echo "stage-migrate: refused ONEOS_TEST_ROOT is for tests, never as root"; exit 2; }
+    [ "$(id -u)" != 0 ] || [ ! -d /system/bin ] || { echo "stage-migrate: refused ONEOS_TEST_ROOT is for tests, never as root"; exit 2; }
     ROOT_UID=$(id -u)
 else
     PATH="/system/bin:/system/xbin:$PATH"

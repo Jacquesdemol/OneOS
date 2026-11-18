@@ -44,10 +44,17 @@ data class PhoneProfile(
     /** Extra switch-time warnings for this phone (no tick needed). */
     val notes: List<Finding> = emptyList(),
 ) {
-    fun matches(model: String, device: String, soc: String): Boolean =
-        model.trim().uppercase(Locale.ROOT).startsWith(modelPrefix) &&
+    fun matches(model: String, device: String, soc: String): Boolean {
+        val m = model.trim().uppercase(Locale.ROOT)
+        val modelOk = if (modelPrefix == "SM-S908E") {
+            m == "SM-S908E" || m == "SM-S908E/DS"
+        } else {
+            m.startsWith(modelPrefix)
+        }
+        return modelOk &&
             device.trim().equals(codename, ignoreCase = true) &&
             soc.trim().equals(socModel, ignoreCase = true)
+    }
 
     fun matches(f: DeviceFacts): Boolean = matches(f.model, f.device, f.soc.model)
 
@@ -1184,13 +1191,15 @@ object Profiles {
         socModel = "s5e9925",
         form = FormFactor.BAR,
         choices = listOf(OXYGEN16_CHOICE),
+        enabled = false,
+        disabledReason = "Exynos Galaxy S22 Ultra (SM-S908B) is not supported; only SM-S908E is validated",
         notes = listOf(EXYNOS),
     )
 
     val S_ULTRA_8450 = PhoneProfile(
         id = ID_S_ULTRA_8450,
         label = "Galaxy S22 Ultra (Snapdragon)",
-        modelPrefix = "SM-S908",
+        modelPrefix = "SM-S908E",
         codename = "b0q",
         socModel = "SM8450",
         form = FormFactor.BAR,

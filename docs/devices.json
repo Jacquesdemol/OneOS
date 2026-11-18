@@ -2240,8 +2240,8 @@
       "codename": "b0s",
       "chip": "s5e9925",
       "form": "bar",
-      "enabled": true,
-      "disabledReason": null,
+      "enabled": false,
+      "disabledReason": "Exynos Galaxy S22 Ultra (SM-S908B) is not supported; only SM-S908E is validated",
       "systems": [
         {
           "image": "oxygenos16-cph2745",
@@ -2254,7 +2254,7 @@
     {
       "id": "s-ultra-8450",
       "label": "Galaxy S22 Ultra (Snapdragon)",
-      "model": "SM-S908",
+      "model": "SM-S908E",
       "codename": "b0q",
       "chip": "SM8450",
       "form": "bar",

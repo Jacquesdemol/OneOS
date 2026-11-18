@@ -652,4 +652,37 @@ class ProfilesTest {
             }
         }
     }
+
+    @Test
+    fun smS908eStrictMatchingAndSocNormalization() {
+        // SM-S908E and SM-S908E/DS resolve to S_ULTRA_8450 when codename is b0q and SoC resolves to SM8450.
+        for (model in listOf("SM-S908E", "SM-S908E/DS", " sm-s908e ", "sm-s908e/ds")) {
+            val socFromModel = SocRules.resolve(SocProps(manufacturer = "QTI", model = "SM8450", platform = "taro"))
+            assertEquals("SM8450", socFromModel.model)
+            assertEquals(SocVendor.QUALCOMM, socFromModel.vendor)
+            assertEquals(Profiles.S_ULTRA_8450, Profiles.resolve(model, "b0q", socFromModel.model).profile)
+
+            val socFromSnd8g1Platform = SocRules.resolve(SocProps(model = "", platform = "snd8g1"))
+            assertEquals("SM8450", socFromSnd8g1Platform.model)
+            assertEquals(SocVendor.QUALCOMM, socFromSnd8g1Platform.vendor)
+            assertEquals("Snapdragon 8 Gen 1", socFromSnd8g1Platform.marketingName)
+            assertEquals(Profiles.S_ULTRA_8450, Profiles.resolve(model, "b0q", socFromSnd8g1Platform.model).profile)
+
+            val socFromSnd8g1Model = SocRules.resolve(SocProps(model = "snd8g1", platform = "taro"))
+            assertEquals("SM8450", socFromSnd8g1Model.model)
+            assertEquals(SocVendor.QUALCOMM, socFromSnd8g1Model.vendor)
+            assertEquals(Profiles.S_ULTRA_8450, Profiles.resolve(model, "b0q", socFromSnd8g1Model.model).profile)
+        }
+
+        // Non-E regional variants (U, U1, W, 0, N) are rejected even with b0q and SM8450.
+        for (unsupported in listOf("SM-S908U", "SM-S908U1", "SM-S908W", "SM-S9080", "SM-S908N", "SM-S908B")) {
+            assertNull("Expected $unsupported to not match S_ULTRA_8450", Profiles.resolve(unsupported, "b0q", "SM8450").profile)
+        }
+
+        // Exynos S22 Ultra (SM-S908B / b0s / s5e9925) profile is explicitly disabled.
+        val exynosMatch = Profiles.resolve("SM-S908B", "b0s", "s5e9925").profile
+        assertEquals(Profiles.S_ULTRA_9925, exynosMatch)
+        assertFalse(Profiles.S_ULTRA_9925.enabled)
+        assertNotNull(Profiles.S_ULTRA_9925.disabledReason)
+    }
 }

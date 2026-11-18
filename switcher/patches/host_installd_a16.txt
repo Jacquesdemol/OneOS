@@ -1,5 +1,5 @@
 # host IInstalld: name code signature (from the host's services.jar)
-# One UI build: samsung/a07xxx/a07x:16/BP4A.251205.006/A076BXXS5BZI3_OLM5BZI3:user/release-keys
+# One UI build: BP4A.251205.006
 createUserData 1 (Ljava/lang/String;III)V
 destroyUserData 2 (Ljava/lang/String;II)V
 setFirstBoot 3 ()V

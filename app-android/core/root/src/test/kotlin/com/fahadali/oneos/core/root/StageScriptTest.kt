@@ -326,9 +326,11 @@ class StageScriptTest {
         File(other, "mountinfo").writeText("22 1 253:0 / / rw - ext4 /dev/root rw\n31 22 0:41 / ${old.path}/data/user rw - f2fs /dev/x rw\n")
         purgeRefused("mounted")
         File(other, "mountinfo").writeText("22 1 253:0 / / rw - ext4 /dev/root rw\n")
-        FakeRoot.exec(listOf("chmod", "000", File(other, "mountinfo").path))
-        purgeRefused("unreadable")
-        FakeRoot.exec(listOf("chmod", "644", File(other, "mountinfo").path))
+        if (fr.uid != "0") {
+            FakeRoot.exec(listOf("chmod", "000", File(other, "mountinfo").path))
+            purgeRefused("unreadable")
+            FakeRoot.exec(listOf("chmod", "644", File(other, "mountinfo").path))
+        }
         // A loop device on its image.
         File(fr.root, "sys/block/loop0/loop/backing_file").writeText("${old.path}/system.raw\n")
         purgeRefused("loop device")

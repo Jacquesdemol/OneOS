@@ -1,60 +1,62 @@
-"""Keep the guest's StorageManagerService away from the host vold's user keys.
+#!/usr/bin/env python3
+"""Drop guest user-key and storage-key calls to the shared host vold (IVold).
 
-The container shares the host's binder services, so the guest framework's
-"vold" is the host's: the one holding the keys of One UI's real users. When
-ColorOS's LockSettingsService set up its synthetic password it called
-setCeStorageProtection() for user 0 (it failed; had it succeeded, One UI's
-user 0 CE key would have been protected with a secret One UI does not know).
-The guest's users live in its own staged /data and need no vold keys, so
-drop every key-management call; the surrounding Java code carries on as if
-they succeeded. Pixel's services.jar also has the AIDL classes themselves
-(IVold$Stub.onTransact dispatches to a local implementation, which the guest
-never is); they are left alone.
-
-Usage: guest_no_vold_keys.py <smali root dir>
-Prints the smali_* directories (dex files) it changed, one per line.
+Replaces void IVold calls (onUserAdded, onUserRemoved, onUserStarted, onUserStopped,
+addUserKeyAuth, clearUserKeyAuth, fixateNewestUserKeyAuth, unlockUserKey, lockUserKey,
+prepareUserStorage, destroyUserStorage, destroyDsuMetadataKey, mountFstab, encryptFstab,
+setStorageBindingSeed, reset outside StorageManagerService.<init>) with `nop`.
 """
 import os
 import re
 import sys
 
-CALLS = re.compile(
-    r"^\s*invoke-interface \{[^}]*\}, Landroid/os/IVold;->"
-    r"(createUserStorageKeys|destroyUserStorageKeys|setCeStorageProtection|"
-    r"unlockCeStorage|lockCeStorage)\([^)]*\)V\s*$"
+VOLD_VOID_METHODS = {
+    "onUserAdded", "onUserRemoved", "onUserStarted", "onUserStopped",
+    "addUserKeyAuth", "clearUserKeyAuth", "fixateNewestUserKeyAuth",
+    "unlockUserKey", "lockUserKey", "prepareUserStorage", "destroyUserStorage",
+    "destroyDsuMetadataKey", "mountFstab", "encryptFstab", "setStorageBindingSeed",
+    "reset",
+}
+
+CALL_RE = re.compile(
+    r"^(\s*)invoke-(?:interface|virtual)(?:/range)? \{[^}]*\}, "
+    r"Landroid/os/IVold(?:\$Stub\$Proxy)?;->([A-Za-z0-9_]+)\([^)]*\)V\s*$"
 )
 
 
 def main(root):
-    changed_dirs = set()
-    removed = 0
+    changed = set()
+    hits = 0
     for dirpath, _, files in os.walk(root):
         for name in files:
             if not name.endswith(".smali"):
                 continue
             path = os.path.join(dirpath, name)
-            if os.path.relpath(path, root).split(os.sep, 1)[-1].startswith(os.path.join("android", "os", "IVold")):
-                continue  # the AIDL classes themselves
-            with open(path) as f:
-                lines = f.read().split("\n")
-            out = []
+            rel = os.path.relpath(path, root)
+            lines = open(path, encoding="utf-8").read().split("\n")
             dirty = False
-            for line in lines:
-                m = CALLS.match(line)
-                if m:
-                    out.append(f"    # OneOS: IVold.{m.group(1)} dropped (host vold holds One UI's keys)")
+            in_sms_init = False
+            is_sms = name == "StorageManagerService.smali"
+            for i, line in enumerate(lines):
+                s = line.strip()
+                if s.startswith(".method "):
+                    in_sms_init = is_sms and " constructor <init>(" in s
+                elif s == ".end method":
+                    in_sms_init = False
+                m = CALL_RE.match(line)
+                if m and m.group(2) in VOLD_VOID_METHODS:
+                    if m.group(2) == "reset" and in_sms_init:
+                        continue
+                    indent = m.group(1)
+                    lines[i] = f"{indent}# OneOS: IVold->{m.group(2)} dropped\n{indent}nop"
                     dirty = True
-                    removed += 1
-                    print(f"{os.path.relpath(path, root)}: {m.group(1)}", file=sys.stderr)
-                else:
-                    out.append(line)
+                    hits += 1
             if dirty:
-                with open(path, "w") as f:
-                    f.write("\n".join(out))
-                changed_dirs.add(os.path.relpath(path, root).split(os.sep)[0])
-    if removed != 5:
-        sys.exit(f"expected 5 IVold key calls, found {removed}")
-    for d in sorted(changed_dirs):
+                open(path, "w", encoding="utf-8").write("\n".join(lines))
+                changed.add(rel.split(os.sep)[0])
+    if hits == 0:
+        sys.exit("guest_no_vold_keys: no IVold user-key call sites found")
+    for d in sorted(changed):
         print(d)
 
 

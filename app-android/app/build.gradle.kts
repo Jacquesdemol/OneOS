@@ -788,6 +788,9 @@ dependencies {
     implementation(project(":core:device"))
     implementation(project(":core:root"))
     implementation(project(":core:safety"))
+    "fullImplementation"(project(":core:image"))
+    "fullImplementation"(project(":core:dex"))
+    "fullImplementation"(project(":core:patch"))
 
     implementation(libs.bundles.sesl9)
     implementation(libs.androidx.dynamicanimation)

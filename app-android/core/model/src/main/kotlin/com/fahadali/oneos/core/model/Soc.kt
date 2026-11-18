@@ -49,15 +49,16 @@ data class SocInfo(
  */
 object SocRules {
     private val QUALCOMM_PLATFORMS = setOf(
-        "msmnile", "kona", "lahaina", "taro", "kalama", "pineapple", "sun", "canoe",
+        "msmnile", "kona", "lahaina", "taro", "snd8g1", "kalama", "pineapple", "sun", "canoe",
     )
     private val QUALCOMM_PREFIXES = listOf("msm", "sdm", "sm8", "sm7", "sm6", "qcom")
     private val EXYNOS_PREFIXES = listOf("s5e", "exynos", "erd", "universal")
     private val MEDIATEK_RE = Regex("^mt\\d")
 
-    /** Platform codename -> SoC model, for builds that leave `ro.soc.model` empty. */
+    /** Platform codename -> SoC model, for builds that leave `ro.soc.model` empty or set it to a platform alias. */
     private val PLATFORM_MODEL = mapOf(
         "taro" to "SM8450",
+        "snd8g1" to "SM8450",
         "kalama" to "SM8550",
         "pineapple" to "SM8650",
         "sun" to "SM8750",
@@ -95,9 +96,13 @@ object SocRules {
         }
 
         val platform = p.platform.trim()
-        val model = p.model.trim().ifEmpty {
-            PLATFORM_MODEL[platform.lowercase(Locale.ROOT)].orEmpty()
-        }
+        val rawModel = p.model.trim()
+        val model = PLATFORM_MODEL[rawModel.lowercase(Locale.ROOT)]
+            ?: rawModel.ifEmpty {
+                PLATFORM_MODEL[platform.lowercase(Locale.ROOT)]
+                    ?: PLATFORM_MODEL[p.chipname.trim().lowercase(Locale.ROOT)]
+                        .orEmpty()
+            }
         val marketing = MARKETING[model.uppercase(Locale.ROOT)]
             ?: MARKETING[p.chipname.trim().uppercase(Locale.ROOT)]
             ?: MARKETING[platform.uppercase(Locale.ROOT)]

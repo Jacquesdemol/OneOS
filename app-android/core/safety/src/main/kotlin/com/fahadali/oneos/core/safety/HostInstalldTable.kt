@@ -157,4 +157,121 @@ object HostInstalldTable {
             for (e in entries) yield(e.name to zip.getInputStream(e).use { it.readBytes() })
         }
     }
+
+    const val EXPECTED_METHODS_A16 = 78
+    const val EXPECTED_METHODS_A17 = 85
+
+    data class ParcelableField(val name: String, val type: String)
+
+    data class ParcelableSpec(
+        val classDescriptor: String,
+        val expectedFields: List<ParcelableField>,
+    )
+
+    val EXPECTED_PARCELABLES: List<ParcelableSpec> = listOf(
+        ParcelableSpec(
+            classDescriptor = "Landroid/os/CreateAppDataArgs;",
+            expectedFields = listOf(
+                ParcelableField("uuid", "Ljava/lang/String;"),
+                ParcelableField("packageName", "Ljava/lang/String;"),
+                ParcelableField("userId", "I"),
+                ParcelableField("flags", "I"),
+                ParcelableField("appId", "I"),
+                ParcelableField("seInfo", "Ljava/lang/String;"),
+                ParcelableField("targetSdkVersion", "I"),
+            ),
+        ),
+        ParcelableSpec(
+            classDescriptor = "Landroid/os/CreateAppDataResult;",
+            expectedFields = listOf(
+                ParcelableField("ceDataInode", "J"),
+                ParcelableField("exceptionCode", "I"),
+            ),
+        ),
+        ParcelableSpec(
+            classDescriptor = "Landroid/os/ReconcileSdkDataArgs;",
+            expectedFields = listOf(
+                ParcelableField("uuid", "Ljava/lang/String;"),
+                ParcelableField("packageName", "Ljava/lang/String;"),
+                ParcelableField("subDirNames", "Ljava/util/List;"),
+                ParcelableField("userId", "I"),
+                ParcelableField("appId", "I"),
+                ParcelableField("previousAppId", "I"),
+                ParcelableField("seInfo", "Ljava/lang/String;"),
+                ParcelableField("flags", "I"),
+            ),
+        ),
+    )
+
+    /**
+     * Verifies that AIDL Parcelables (`CreateAppDataArgs`, `CreateAppDataResult`,
+     * `ReconcileSdkDataArgs`) present in [dexBytes] contain all expected wire fields
+     * with matching types. Returns a list of mismatch descriptions (empty if valid).
+     */
+    fun verifyParcelables(dexBytes: ByteArray): List<String> {
+        val dex = DexBackedDexFile(Opcodes.getDefault(), dexBytes)
+        val classMap = dex.classes.associateBy { it.type }
+        val problems = mutableListOf<String>()
+        for (spec in EXPECTED_PARCELABLES) {
+            val cls = classMap[spec.classDescriptor] ?: continue
+            val instanceFields = cls.instanceFields.map { ParcelableField(it.name, it.type) }
+            for (expected in spec.expectedFields) {
+                val actual = instanceFields.firstOrNull { it.name == expected.name }
+                if (actual == null) {
+                    problems += "${spec.classDescriptor}: missing field ${expected.name}:${expected.type}"
+                } else if (actual.type != expected.type) {
+                    problems += "${spec.classDescriptor}.${expected.name}: expected ${expected.type}, found ${actual.type}"
+                }
+            }
+        }
+        return problems
+    }
+
+    /**
+     * Compares AIDL Parcelable instance field layouts in order between [hostDexBytes]
+     * and [guestDexBytes] so wire serialization mismatches fail closed before boot.
+     */
+    fun verifyGuestAgainstHostParcelables(hostDexBytes: ByteArray, guestDexBytes: ByteArray): List<String> {
+        val hostDex = DexBackedDexFile(Opcodes.getDefault(), hostDexBytes)
+        val guestDex = DexBackedDexFile(Opcodes.getDefault(), guestDexBytes)
+        val hostClasses = hostDex.classes.associateBy { it.type }
+        val guestClasses = guestDex.classes.associateBy { it.type }
+        val problems = mutableListOf<String>()
+        for (spec in EXPECTED_PARCELABLES) {
+            val hCls = hostClasses[spec.classDescriptor] ?: continue
+            val gCls = guestClasses[spec.classDescriptor] ?: continue
+            val hFields = hCls.instanceFields.map { "${it.name}:${it.type}" }
+            val gFields = gCls.instanceFields.map { "${it.name}:${it.type}" }
+            if (hFields != gFields) {
+                problems += "${spec.classDescriptor} parcelable field layout mismatch: host=$hFields vs guest=$gFields"
+            }
+        }
+        return problems
+    }
+
+    /**
+     * Validates that the derived installd method table matches the expected method count
+     * and core entrypoints for Android 16 (SDK 36, 78 methods) or Android 17 (SDK 37, 85 methods).
+     */
+    fun validateMethodCountForSdk(sdk: Int, methods: List<InstalldMethod>): List<String> {
+        val problems = mutableListOf<String>()
+        val expectedCount = when (sdk) {
+            36 -> EXPECTED_METHODS_A16
+            37 -> EXPECTED_METHODS_A17
+            else -> {
+                problems += "Unsupported SDK $sdk for installd table validation (expected 36 or 37)"
+                return problems
+            }
+        }
+        if (methods.size != expectedCount) {
+            problems += "SDK $sdk expects $expectedCount installd methods, found ${methods.size}"
+        }
+        val byName = methods.associateBy { it.name }
+        for (required in listOf("createUserData", "createAppData", "destroyAppData", "dexopt", "rmPackageDir")) {
+            if (required !in byName) {
+                problems += "SDK $sdk installd table missing core method '$required'"
+            }
+        }
+        return problems
+    }
 }

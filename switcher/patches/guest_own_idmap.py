@@ -1,43 +1,33 @@
-"""Let the guest's overlay manager use the guest's own idmap2d.
-
-IdmapDaemon starts and stops the "idmap2d" init service through
-SystemService.start/stop. In the container that is the HOST init, which
-starts One UI's idmap2d in One UI's mount namespace: it cannot see the
-guest's /my_product, /my_stock or /system/system_ext overlays, so no overlay
-ever applied (9241 "failed to read IDMAP" in run 25), and it wrote into One
-UI's /data/resource-cache. guest_start.sh now runs the guest's
-/system/bin/idmap2d for the whole session; drop the start/stop calls so the
-overlay manager just uses that one. (Pixel's IdmapDaemon passes the name in p0.)
-
-Usage: guest_own_idmap.py <smali root dir>
-Prints the smali_* directory it changed.
-"""
+#!/usr/bin/env python3
+"""Route guest IdmapDaemon binder lookup to 'idmap_guest' instead of host 'idmap'."""
 import os
 import re
 import sys
 
-SUFFIX = os.path.join("com", "android", "server", "om", "IdmapDaemon.smali")
-CALL = re.compile(r"^\s*invoke-static \{[vp]\d+\}, Landroid/os/SystemService;->(start|stop)\(Ljava/lang/String;\)V\s*$")
+IDMAP_STR = re.compile(r'^(\s*)const-string\s+([vp]\d+),\s*"idmap"\s*$')
 
 
 def main(root):
-    hits = [os.path.join(d, f) for d, _, fs in os.walk(root) for f in fs
-            if os.path.join(d, f).endswith(os.sep + SUFFIX)]
-    if len(hits) != 1:
-        sys.exit(f"expected one IdmapDaemon.smali, found {len(hits)}")
-    path = hits[0]
-    lines = open(path).read().split("\n")
-    n = 0
-    for i, line in enumerate(lines):
-        m = CALL.match(line)
-        if m:
-            lines[i] = f"    # OneOS: SystemService.{m.group(1)}(idmap2d) dropped (host init; the guest runs its own)"
-            n += 1
-    if n != 2:
-        sys.exit(f"IdmapDaemon: expected 2 SystemService start/stop calls, found {n}")
-    open(path, "w").write("\n".join(lines))
-    print("IdmapDaemon: idmap2d start/stop dropped", file=sys.stderr)
-    print(os.path.relpath(path, root).split(os.sep)[0])
+    changed = set()
+    for dirpath, _, files in os.walk(root):
+        for name in files:
+            if not name.startswith("IdmapDaemon") or not name.endswith(".smali"):
+                continue
+            path = os.path.join(dirpath, name)
+            rel = os.path.relpath(path, root)
+            lines = open(path, encoding="utf-8").read().split("\n")
+            dirty = False
+            for i, line in enumerate(lines):
+                m = IDMAP_STR.match(line)
+                if m:
+                    indent, reg = m.groups()
+                    lines[i] = f'{indent}# OneOS: guest idmap2d service\n{indent}const-string {reg}, "idmap_guest"'
+                    dirty = True
+            if dirty:
+                open(path, "w", encoding="utf-8").write("\n".join(lines))
+                changed.add(rel.split(os.sep)[0])
+    for d in sorted(changed):
+        print(d)
 
 
 if __name__ == "__main__":

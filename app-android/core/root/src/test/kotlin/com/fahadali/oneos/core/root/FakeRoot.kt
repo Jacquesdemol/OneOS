@@ -227,11 +227,15 @@ class FakeRoot(
         return dir
     }
 
-    /** Every file and folder under [dir], with size and mode. */
-    fun listing(dir: File): String = exec(listOf("find", dir.path, "-printf", "%P %y %m %s\\n")).lines().sorted().joinToString("\n")
+    /** Every file and folder under [dir], with size and mode (directory st_size normalized across tmpfs/ext4). */
+    fun listing(dir: File): String = exec(listOf("find", dir.path, "-printf", "%P %y %m %s\\n"))
+        .lines()
+        .map { it.replace(Regex("""^(.* d [0-7]+) \d+$"""), "$1 0") }
+        .sorted()
+        .joinToString("\n")
 
     /** Every file and folder under the stage's parent, with size and mode: compared before and after a refusal. */
-    fun snapshot(): String = exec(listOf("find", File(root, "data/local/tmp").path, "-printf", "%P %y %m %s\\n")).lines().sorted().joinToString("\n")
+    fun snapshot(): String = listing(File(root, "data/local/tmp"))
 
     fun mode(f: File): String = exec(listOf("stat", "-c", "%a", f.path)).trim()
 

@@ -314,8 +314,7 @@ Downloads: each system's own link below (the SourceForge mirror, resumable); all
   - Galaxy S23 FE (SM-S711, s5e9925), not tested yet
   - Galaxy S23 FE (Snapdragon) (SM-S711, SM8450), not tested yet
   - Galaxy S22+ (SM-S906, s5e9925), not tested yet
-  - Galaxy S22 Ultra (SM-S908, s5e9925), not tested yet
-  - Galaxy S22 Ultra (Snapdragon) (SM-S908, SM8450), not tested yet
+  - Galaxy S22 Ultra (Snapdragon) (SM-S908E, SM8450), not tested yet
   - Galaxy A55 5G (SM-A556, s5e8845), not tested yet
   - Galaxy S22 (Snapdragon) (SM-S901, SM8450), not tested yet
   - Galaxy M55s (SM-M558, SM7450), not tested yet
