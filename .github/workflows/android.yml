@@ -21,7 +21,6 @@ on:
 
 permissions:
   contents: read
-  packages: read
 
 concurrency:
   group: android-${{ github.workflow }}-${{ github.ref }}
@@ -37,54 +36,27 @@ jobs:
       run:
         working-directory: app-android
 
-    env:
-      CI: true
-      GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.parallel=false
-      GH_PACKAGES_USER: ${{ github.actor }}
-      GH_PACKAGES_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Set up JDK 24
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "24"
+          java-version: "21"
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
-        with:
-          packages: platform-tools
 
-      - name: Install Android 17 SDK
-        shell: bash
-        run: |
-          yes | sdkmanager --licenses >/dev/null || true
-
-          sdkmanager --channel=3 \
-            "platforms;android-37" \
-            "build-tools;37.0.0"
-
-      - name: Verify Android SDK
-        shell: bash
-        run: |
-          sdkmanager --list_installed
-
-          test -d "$ANDROID_HOME/platforms/android-37"
-          test -d "$ANDROID_HOME/build-tools/37.0.0"
-          test -d "$ANDROID_HOME/platform-tools"
-
-      - name: Make Gradle wrapper executable
-        run: chmod +x ./gradlew
+      - name: Install Android 37 platform
+        run: sdkmanager "platforms;android-37"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
-          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x ./gradlew
 
       - name: Build and stage Guest Manager
         run: ../scripts/build-guest-manager.sh --debug
@@ -98,35 +70,11 @@ jobs:
       - name: Build OneOS Full APK
         run: ./gradlew --no-daemon --max-workers=3 assembleFullDebug
 
-      - name: Locate OneOS Full APK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          mapfile -t apks < <(
-            find app/build/outputs/apk/full/debug \
-              -type f \
-              -name '*.apk' \
-              2>/dev/null | sort
-          )
-
-          if (( ${#apks[@]} == 0 )); then
-            echo "No OneOS Full APK was produced." >&2
-            find app/build/outputs -maxdepth 6 -type f 2>/dev/null | sort >&2 || true
-            exit 1
-          fi
-
-          echo "Found APKs:"
-          printf '  %s\n' "${apks[@]}"
-
-          mkdir -p artifacts
-          cp "${apks[0]}" artifacts/OneOS-Full-debug.apk
-
       - name: Upload OneOS Full APK
         uses: actions/upload-artifact@v4
         with:
           name: OneOS-Full-debug
-          path: app-android/artifacts/OneOS-Full-debug.apk
+          path: app/build/outputs/apk/full/debug/*.apk
           if-no-files-found: error
           retention-days: 14
 
@@ -136,8 +84,7 @@ jobs:
         with:
           name: Android-reports
           path: |
-            app-android/app/build/reports/
-            app-android/core/**/build/reports/
-            app-android/guest/build/reports/
+            **/build/reports/tests/
+            **/build/reports/lint-results-*.html
           if-no-files-found: ignore
           retention-days: 14
