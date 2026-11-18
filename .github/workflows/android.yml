@@ -1,4 +1,4 @@
-    
+
 name: Android CI
 
 on:
@@ -9,12 +9,14 @@ on:
       - "switcher/**"
       - "scripts/**"
       - ".github/workflows/android.yml"
+
   pull_request:
     paths:
       - "app-android/**"
       - "switcher/**"
       - "scripts/**"
       - ".github/workflows/android.yml"
+
   workflow_dispatch:
 
 permissions:
@@ -46,14 +48,11 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK packages
-       run: |
-           yes | sdkmanager --licenses >/dev/null
-           sdkmanager "platform-tools" "platforms;android-37" "build-tools;37.0.0"
+      - name: Install Android 37 platform
+        run: sdkmanager "platforms;android-37"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
