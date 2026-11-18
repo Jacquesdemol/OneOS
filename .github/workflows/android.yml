@@ -82,12 +82,36 @@ jobs:
       - name: Build OneOS Probe APK
         run: ./gradlew --no-daemon --max-workers=3 assembleProbeDebug
 
+      - name: Locate OneOS Probe APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mapfile -t apks < <(
+            find app/build/outputs/apk \
+              -type f \
+              -name '*.apk' \
+              | sort
+          )
+
+          if (( ${#apks[@]} == 0 )); then
+            echo "No APK was produced by assembleProbeDebug" >&2
+            find app/build/outputs -maxdepth 5 -type f 2>/dev/null | sort >&2 || true
+            exit 1
+          fi
+
+          echo "Found APKs:"
+          printf '  %s\n' "${apks[@]}"
+
+          mkdir -p artifacts
+          cp "${apks[@]}" artifacts/
+
       - name: Upload OneOS Probe APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: OneOS-Probe-debug
-          path: app/build/outputs/apk/probe/debug/*.apk
+          path: app-android/artifacts/*.apk
           if-no-files-found: error
           retention-days: 14
 
@@ -97,8 +121,8 @@ jobs:
         with:
           name: Android-reports
           path: |
-            app/build/reports/
-            core/**/build/reports/
-            guest/build/reports/
+            app-android/app/build/reports/
+            app-android/core/**/build/reports/
+            app-android/guest/build/reports/
           if-no-files-found: ignore
           retention-days: 14
