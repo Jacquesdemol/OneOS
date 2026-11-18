@@ -259,7 +259,16 @@ object AppUpdater : BackgroundJob<AppUpdater.State>(State(), "oneos-update") {
         c.instanceFollowRedirects = true
         try {
             if (c.responseCode != HttpURLConnection.HTTP_OK) throw IOException("HTTP ${c.responseCode}")
-            return c.inputStream.use { it.readNBytes(4097) }.toString(Charsets.UTF_8)
+            return c.inputStream.use { input ->
+                val buf = ByteArray(4097)
+                var total = 0
+                while (total < buf.size) {
+                    val n = input.read(buf, total, buf.size - total)
+                    if (n < 0) break
+                    total += n
+                }
+                String(buf, 0, total, Charsets.UTF_8)
+            }
         } finally {
             c.disconnect()
         }

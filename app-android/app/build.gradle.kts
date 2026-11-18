@@ -595,6 +595,17 @@ android {
         buildConfig = true
     }
 
+    packaging {
+        resources {
+            excludes += setOf(
+                "LICENSE",
+                "META-INF/LICENSE.txt",
+                "META-INF/NOTICE.txt",
+                "META-INF/versions/*/module-info.class",
+            )
+        }
+    }
+
     lint {
         abortOnError = true
         // Library modules run their own lintDebug; the app checks its own code.
