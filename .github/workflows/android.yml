@@ -1,3 +1,4 @@
+
 name: Android CI
 
 on:
@@ -8,26 +9,29 @@ on:
       - "switcher/**"
       - "scripts/**"
       - ".github/workflows/android.yml"
+
   pull_request:
     paths:
       - "app-android/**"
       - "switcher/**"
       - "scripts/**"
       - ".github/workflows/android.yml"
+
   workflow_dispatch:
 
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   group: android-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  probe:
-    name: Test and build OneOS Probe
+  full:
+    name: Test and build OneOS Full
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     defaults:
       run:
@@ -50,20 +54,29 @@ jobs:
         with:
           distribution: temurin
           java-version: "24"
-          cache: gradle
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: platform-tools platforms;android-36 build-tools;36.0.0
+          packages: platform-tools
+
+      - name: Install Android 17 SDK
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+
+          sdkmanager --channel=3 \
+            "platforms;android-37" \
+            "build-tools;37.0.0"
 
       - name: Verify Android SDK
         shell: bash
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
           sdkmanager --list_installed
-          test -d "$ANDROID_HOME/platforms/android-36"
-          test -d "$ANDROID_HOME/build-tools/36.0.0"
+
+          test -d "$ANDROID_HOME/platforms/android-37"
+          test -d "$ANDROID_HOME/build-tools/37.0.0"
+          test -d "$ANDROID_HOME/platform-tools"
 
       - name: Make Gradle wrapper executable
         run: chmod +x ./gradlew
@@ -73,30 +86,33 @@ jobs:
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
+      - name: Build and stage Guest Manager
+        run: ../scripts/build-guest-manager.sh --debug
+
       - name: Run unit tests
         run: ./gradlew --no-daemon --max-workers=3 test
 
-      - name: Run Probe lint
-        run: ./gradlew --no-daemon --max-workers=3 lintProbeDebug
+      - name: Run OneOS Full lint
+        run: ./gradlew --no-daemon --max-workers=3 lintFullDebug
 
-      - name: Build OneOS Probe APK
-        run: ./gradlew --no-daemon --max-workers=3 assembleProbeDebug
+      - name: Build OneOS Full APK
+        run: ./gradlew --no-daemon --max-workers=3 assembleFullDebug
 
-      - name: Locate OneOS Probe APK
+      - name: Locate OneOS Full APK
         shell: bash
         run: |
           set -euo pipefail
 
           mapfile -t apks < <(
-            find app/build/outputs/apk \
+            find app/build/outputs/apk/full/debug \
               -type f \
               -name '*.apk' \
-              | sort
+              2>/dev/null | sort
           )
 
           if (( ${#apks[@]} == 0 )); then
-            echo "No APK was produced by assembleProbeDebug" >&2
-            find app/build/outputs -maxdepth 5 -type f 2>/dev/null | sort >&2 || true
+            echo "No OneOS Full APK was produced." >&2
+            find app/build/outputs -maxdepth 6 -type f 2>/dev/null | sort >&2 || true
             exit 1
           fi
 
@@ -104,14 +120,13 @@ jobs:
           printf '  %s\n' "${apks[@]}"
 
           mkdir -p artifacts
-          cp "${apks[@]}" artifacts/
+          cp "${apks[0]}" artifacts/OneOS-Full-debug.apk
 
-      - name: Upload OneOS Probe APK
-        if: success()
+      - name: Upload OneOS Full APK
         uses: actions/upload-artifact@v4
         with:
-          name: OneOS-Probe-debug
-          path: app-android/artifacts/*.apk
+          name: OneOS-Full-debug
+          path: app-android/artifacts/OneOS-Full-debug.apk
           if-no-files-found: error
           retention-days: 14
 
