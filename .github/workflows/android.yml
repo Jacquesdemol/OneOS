@@ -51,11 +51,21 @@ jobs:
         run: |
           sh switcher/native/build.sh
 
+      - name: Build Guest Manager APK first
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
+          ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/27.2.12479018
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
+        run: |
+          chmod +x scripts/build-guest-manager.sh
+          sh scripts/build-guest-manager.sh
+
       - name: Build Android APK
         working-directory: app-android
         env:
           ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
           ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/27.2.12479018
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
         run: |
           chmod +x gradlew
           ./gradlew assembleFullDebug
