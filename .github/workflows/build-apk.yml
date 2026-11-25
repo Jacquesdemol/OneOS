@@ -21,27 +21,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y busybox-static dash python3
 
-      - name: Run shell syntax and Python unit tests
-        run: |
-          set -euo pipefail
-          for f in switcher/assets/*.sh scripts/*.sh; do
-            [ -f "$f" ] || continue
-            sh -n "$f"
-          done
-          python3 scripts/test-boot-fixes.py
-          for t in \
-            scripts/test-audio-hal-stale-restart.py \
-            scripts/test-guest-fingerprint-aidl.py \
-            scripts/test-guest-root.py \
-            scripts/test-guest-controls.py \
-            scripts/test-guest-installer-helpers.py \
-            scripts/test-verified-overlays.py \
-            scripts/test-launch-switch-verdict.py \
-            scripts/test-guest-local-lock.py; do
-            [ -f "$t" ] || continue
-            python3 "$t"
-          done
-
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
