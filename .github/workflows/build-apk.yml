@@ -9,9 +9,15 @@ on:
 jobs:
   validate-and-build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     env:
-      GH_PACKAGES_USER: ${{ github.actor }}
-      GH_PACKAGES_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_PACKAGES_USER: ${{ secrets.GH_PACKAGES_USER || secrets.GPR_USER || github.actor }}
+      GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN || secrets.GPR_TOKEN || secrets.GITHUB_TOKEN }}
+      GPR_USER: ${{ secrets.GPR_USER || secrets.GH_PACKAGES_USER || github.actor }}
+      GPR_TOKEN: ${{ secrets.GPR_TOKEN || secrets.GH_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
+      GRADLE_OPTS: -Dorg.gradle.internal.http.connectionTimeout=60000 -Dorg.gradle.internal.http.socketTimeout=60000
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -34,10 +40,20 @@ jobs:
         run: |
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "platform-tools" "build-tools;35.0.0" "platforms;android-36"
-          sdkmanager "platforms;android-37" || true
+          sdkmanager "build-tools;36.0.0" "platforms;android-37" || true
 
       - name: Setup Gradle caching
         uses: gradle/actions/setup-gradle@v4
+
+      - name: Check GitHub Packages Maven access
+        run: |
+          code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 15 \
+            -u "${GH_PACKAGES_USER}:${GH_PACKAGES_TOKEN}" \
+            "https://maven.pkg.github.com/tribalfs/oneui-design/io/github/tribalfs/oneui-design/0.9.13+oneui8/oneui-design-0.9.13+oneui8.pom" || echo "000")
+          echo "GitHub Packages (tribalfs/oneui-design) HTTP status: $code"
+          if [ "$code" = "401" ] || [ "$code" = "403" ]; then
+            echo "::warning::GitHub Packages returned HTTP $code using current token. Configure repository secret GH_PACKAGES_TOKEN (or GPR_TOKEN) with a GitHub PAT having read:packages scope if the Gradle cache is cold."
+          fi
 
       - name: Detect release signing secrets and build APK
         env:
@@ -53,19 +69,19 @@ jobs:
             echo "Release keystore secrets detected; preparing release build..."
             mkdir -p "$HOME/.oneos-release"
             echo "$KEYSTORE_BASE64" | base64 --decode > "$HOME/.oneos-release/release.jks"
-            cat > "$HOME/.oneos-release/keystore.properties" <<EOF
-          storeFile=$HOME/.oneos-release/release.jks
-          storePassword=$KEYSTORE_PASSWORD
-          keyAlias=$KEY_ALIAS
-          keyPassword=$KEY_PASSWORD
-          EOF
+            printf '%s\n' \
+              "storeFile=$HOME/.oneos-release/release.jks" \
+              "storePassword=$KEYSTORE_PASSWORD" \
+              "keyAlias=$KEY_ALIAS" \
+              "keyPassword=$KEY_PASSWORD" \
+              > "$HOME/.oneos-release/keystore.properties"
             ./scripts/build-guest-manager.sh release
-            (cd app-android && ./gradlew :app:assembleRelease --no-daemon)
+            (cd app-android && ./gradlew :app:assembleRelease --no-daemon --stacktrace)
             BUILD_VARIANT="release"
           else
             echo "No release keystore secrets configured; running debug build..."
             ./scripts/build-guest-manager.sh debug
-            (cd app-android && ./gradlew :app:assembleDebug --no-daemon)
+            (cd app-android && ./gradlew :app:assembleDebug --no-daemon --stacktrace)
             BUILD_VARIANT="debug"
           fi
 

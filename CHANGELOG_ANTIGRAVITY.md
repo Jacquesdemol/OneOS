@@ -129,3 +129,36 @@ Sessão de análise e correções baseada no protocolo [Sync.md](file:///data/da
 - `YAML_BASIC_STRUCTURE_OK` em `build-overlays.yml` e `build-apk.yml` (PyYAML não instalado no Termux).
 - `test-boot-fixes.py` (4/4), `test-audio-hal-stale-restart.py` (4/4), `test-guest-fingerprint-aidl.py` (7/7), `test-guest-root.py` (6/6), `test-guest-controls.py` (10/10), `test-guest-installer-helpers.py` (5/5), `test-verified-overlays.py` (4/4) e `test-launch-switch-verdict.py` (18/18) **PASSARAM**.
 - `check-shell.py` (`sh -n` no lugar de `busybox`): 41 blocos verificados sem falhas nos trechos modificados (apenas 2 achados pré-existentes do upstream em `guest_start.sh:2466` e `oneos_switch.sh:2725`).
+
+---
+
+## Correção de Resolução Maven/Gradle no GitHub Actions (`maven.md`)
+
+### Causa Raiz Identificada
+1. **Dependências SESL9 e `oneui-design` hospedadas exclusivamente no GitHub Packages (`tribalfs`):**
+   - Validação direta via `curl` nos endpoints confirmou que `io.github.tribalfs:oneui-design:0.9.13+oneui8` e os 17 artefatos `sesl.androidx.*` / `sesl.com.google.android.material:material` (`sesl9`) não estão no Maven Central (`404`) nem no JitPack (`400`/`404`), existindo apenas nos repositórios GitHub Packages de `tribalfs` (`tribalfs/oneui-design`, `tribalfs/sesl-androidx`, `tribalfs/sesl-material-components-android`).
+   - Em contrapartida, `com.android.application:9.4.1`, `com.android.tools.smali:smali-dexlib2:3.0.10` (`200` no Google Maven), `io.github.oneuiproject:icons:1.1.0` (`200` no Maven Central) e `org.jetbrains.kotlin.jvm:2.4.21` (`200` no Gradle Plugin Portal) estão íntegros.
+2. **Autenticação cross-owner no GitHub Actions (`build-apk.yml` e `android.yml`):**
+   - [build-apk.yml](file:///data/data/com.termux/files/home/agy/OneOS/.github/workflows/build-apk.yml) não declarava `permissions: contents: read` / `packages: read` e fixava `GH_PACKAGES_TOKEN: ${{ secrets.GITHUB_TOKEN }}` sem consultar secrets de PAT. Como `GITHUB_TOKEN` é restrito ao repositório atual, o GitHub Packages recusa downloads cross-owner em `maven.pkg.github.com/tribalfs/*` com `401 Unauthorized` / `403 Forbidden`.
+   - [android.yml](file:///data/data/com.termux/files/home/agy/OneOS/.github/workflows/android.yml) também usava JDK `24` (incompatível com `jvmToolchain = "21"` e `org.gradle.java.installations.auto-download=false`) e não passava credenciais nem cache Gradle.
+3. **Configuração de repositórios e timeouts no Gradle (`settings.gradle.kts` e `gradle-wrapper.properties`):**
+   - [settings.gradle.kts](file:///data/data/com.termux/files/home/agy/OneOS/app-android/settings.gradle.kts) usava a URL wildcard `https://maven.pkg.github.com/tribalfs/*` sem `content { includeGroupByRegex(...) }`, consultando o GitHub Packages inclusive para artefatos do Maven Central/Google Maven, enviando `credentials` vazias quando sem token e ignorando `GPR_USER`/`GPR_TOKEN`/`GITHUB_ACTOR`/`GITHUB_TOKEN` e propriedades Gradle.
+   - [gradle-wrapper.properties](file:///data/data/com.termux/files/home/agy/OneOS/app-android/gradle/wrapper/gradle-wrapper.properties) definia `networkTimeout=10000` e `retries=0`, insuficiente para redes de CI.
+
+### Arquivos Alterados
+- [settings.gradle.kts](file:///data/data/com.termux/files/home/agy/OneOS/app-android/settings.gradle.kts):
+  - Substituído `https://maven.pkg.github.com/tribalfs/*` pelos 3 repositórios explícitos (`tribalfs/oneui-design`, `tribalfs/sesl-androidx`, `tribalfs/sesl-material-components-android`) com filtro `content { includeGroupByRegex("^(io\\.github\\.tribalfs|sesl\\..*)$") }`.
+  - Adicionada resolução limpa de credenciais (`~/.config/twidget/github.properties`, `local.properties`, propriedades Gradle `ghPackages*`/`gpr.*` e env vars `GH_PACKAGES_*`, `GPR_*`, `GITHUB_ACTOR`/`GITHUB_TOKEN`), aplicando `credentials` apenas quando não vazias e emitindo aviso claro se ausentes em modo online.
+- [gradle-wrapper.properties](file:///data/data/com.termux/files/home/agy/OneOS/app-android/gradle/wrapper/gradle-wrapper.properties):
+  - `networkTimeout` aumentado para `60000` e `retries` para `3`.
+- [build-apk.yml](file:///data/data/com.termux/files/home/agy/OneOS/.github/workflows/build-apk.yml):
+  - Adicionado `permissions: contents: read` e `packages: read`.
+  - Configurado `GH_PACKAGES_USER`/`GPR_USER` (`secrets.GH_PACKAGES_USER || secrets.GPR_USER || github.actor`) e `GH_PACKAGES_TOKEN`/`GPR_TOKEN` (`secrets.GH_PACKAGES_TOKEN || secrets.GPR_TOKEN || secrets.GITHUB_TOKEN`), além de `GRADLE_OPTS` com `-Dorg.gradle.internal.http.connectionTimeout=60000 -Dorg.gradle.internal.http.socketTimeout=60000`.
+  - Adicionada verificação diagnóstica não bloqueante de acesso ao GitHub Packages (`Check GitHub Packages Maven access`), instalação opcional de `build-tools;36.0.0`, geração limpa de `keystore.properties` via `printf` e `--stacktrace` no `./gradlew`.
+- [android.yml](file:///data/data/com.termux/files/home/agy/OneOS/.github/workflows/android.yml):
+  - Alinhado JDK de `24` para `21`, adicionado `permissions`, `setup-gradle@v4`, `GRADLE_OPTS` e repasse de credenciais `GH_PACKAGES_*` / `GPR_*`.
+
+### Secret Necessário no GitHub Actions (para cache frio)
+- Para resolver `io.github.tribalfs:oneui-design` e os pacotes `sesl.*` (`sesl9`) do proprietário `tribalfs` em cache frio no GitHub Actions, configure nos **Repository Secrets** (`Settings -> Secrets and variables -> Actions`):
+  - **`GH_PACKAGES_TOKEN`** (ou **`GPR_TOKEN`**): um Personal Access Token (Classic) do GitHub com o escopo **`read:packages`**.
+  - **`GH_PACKAGES_USER`** (ou **`GPR_USER`**, opcional): usuário GitHub dono do PAT (se omitido, usa `${{ github.actor }}`).
