@@ -21,6 +21,9 @@ def extract(text):
     # would catches it: what follows the stray quote no longer parses.
     res=[]
     for m in re.finditer(r'(?:sh|su) -c (["\'])', text):
+        line_start = text.rfind('\n', 0, m.start()) + 1
+        if text[line_start:m.start()].lstrip().startswith('#'):
+            continue
         q=m.group(1); i=m.end(); j=i
         if q=="'":
             j=text.find("'",i);
@@ -75,3 +78,4 @@ for p in paths:
         inner = dq_unescape(b) if q=='"' else b
         check(inner,f"{os.path.basename(p)}:{line}",1,fails,total)
 print(f"embedded scripts checked: {total[0]}"); print("\n".join(fails) if fails else "all parse in dash and busybox")
+if fails: sys.exit(1)

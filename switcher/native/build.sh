@@ -7,7 +7,7 @@ set -e
 DIR="$(cd "$(dirname "$0")" && pwd)"
 ANDROID_HOME="${ANDROID_HOME:-/opt/android-sdk}"
 NDK="${ANDROID_NDK_HOME:-}"
-if [ -z "$NDK" ] && [ -d "$ANDROID_HOME/ndk" ]; then
+if { [ -z "$NDK" ] || [ ! -x "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" ]; } && [ -d "$ANDROID_HOME/ndk" ]; then
     NDK="$(ls -d "$ANDROID_HOME"/ndk/* 2>/dev/null | sort -V | tail -1 || true)"
 fi
 
@@ -47,7 +47,7 @@ elif command -v zig >/dev/null 2>&1; then
         "$DIR/oneos_bpf_ringbuf.c" -o "$DIR/../assets/oneos_bpf_ringbuf"
     chmod 0755 "$DIR/../assets/oneos_bpf_ringbuf"
     ls -la "$DIR/../assets/oneos_bpf_ringbuf"
-elif command -v clang >/dev/null 2>&1; then
+elif command -v clang >/dev/null 2>&1 && { [ "$(uname -m)" = "aarch64" ] || [ "$(uname -m)" = "arm64" ]; }; then
     echo "build.sh: NDK not found; building static oneos_bpf_ringbuf with clang -static"
     clang -static -O2 -s -Wall -Wextra \
         "$DIR/oneos_bpf_ringbuf.c" -o "$DIR/../assets/oneos_bpf_ringbuf"
