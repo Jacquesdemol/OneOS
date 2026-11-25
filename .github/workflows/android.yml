@@ -1,0 +1,72 @@
+name: Build OneOS APK
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Native Helpers & Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 24
+        uses: actions/setup-java@v4
+        with:
+          java-version: '24'
+          distribution: 'temurin'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup Android SDK & NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK Platform & Build-Tools 36 and NDK
+        run: |
+          sdkmanager --install "ndk;27.2.12479018" "build-tools;36.0.0" "platforms;android-36"
+
+      - name: Run regression & shell checks
+        run: |
+          sudo apt-get update && sudo apt-get install -y dash busybox-static
+          python3 scripts/check-shell.py
+          python3 scripts/test-boot-fixes.py
+
+      - name: Build native aarch64 helpers
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
+          ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/27.2.12479018
+        run: |
+          sh switcher/native/build.sh
+
+      - name: Build Android APK
+        working-directory: app-android
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
+          ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/27.2.12479018
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleFullDebug
+
+      - name: Locate & inspect built APK
+        run: |
+          APK_PATH=$(find app-android/app/build/outputs/apk -name "*.apk" | head -n 1)
+          echo "Built APK: $APK_PATH"
+          ls -lh "$APK_PATH"
+
+      - name: Upload OneOS APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OneOS-debug-apk
+          path: app-android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
