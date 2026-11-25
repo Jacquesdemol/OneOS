@@ -1008,6 +1008,51 @@ fi
 # without sound and a game's endless static (A56 da7379d6, M55s 0e73a8d6) all
 # fell in the gap between the capture's head and its end (A56: 13:48-15:35);
 # this log had the whole A56 session but none of those tags.
+mkdir -p "$STAGE/tmp"
+SW_SINCE=$(date '+%s.000' 2>/dev/null)
+[ -n "$SW_SINCE" ] && printf '%s\n' "$SW_SINCE" > "$STAGE/session_start_epoch"
+cat > "$STAGE/tmp/capture_guest_crash.sh" <<'CRASHCAP'
+#!/system/bin/sh
+# Capture the full untruncated Java fatal exception, tombstones, and kernel
+# death signals of the active guest session into $STAGE/guest_crash.log (< 64 KB)
+# before auto-return kills watchers or reboots.
+S="${STAGE:-/data/local/tmp/oneos}"
+OUT="$S/guest_crash.log"
+TMP="$S/guest_crash.log.tmp"
+REASON="${1:-return}"
+SINCE=$(cat "$S/session_start_epoch" 2>/dev/null)
+{
+    printf '=== OneOS Guest Crash Snapshot ===\n'
+    printf 'date: %s\nreason: %s\n' "$(date 2>/dev/null)" "$REASON"
+    printf 'pids: system_server=%s zygote64=%s surfaceflinger=%s\n' \
+        "$(pidof system_server 2>/dev/null || true)" \
+        "$(pidof zygote64 2>/dev/null || true)" \
+        "$(pidof surfaceflinger 2>/dev/null || true)"
+    printf '\n=== Fatal Logcat (AndroidRuntime/SystemServer/DEBUG) ===\n'
+    if [ -n "$SINCE" ]; then
+        timeout 10 logcat -d -b crash,system,main -v threadtime -T "$SINCE" \
+            -s AndroidRuntime:E SystemServer:E SystemServiceManager:E ConnectivityServiceInitializer:E DEBUG:F libc:F 2>/dev/null
+    else
+        timeout 10 logcat -d -b crash,system,main -v threadtime -t 500 \
+            -s AndroidRuntime:E SystemServer:E SystemServiceManager:E ConnectivityServiceInitializer:E DEBUG:F libc:F 2>/dev/null
+    fi | tail -c 45056
+    printf '\n=== Recent Guest Tombstones ===\n'
+    if [ -d "$S/data/tombstones" ]; then
+        for tb in $(ls -t "$S/data/tombstones" 2>/dev/null | head -n 2); do
+            [ -f "$S/data/tombstones/$tb" ] || continue
+            printf -- '--- %s ---\n' "$tb"
+            head -n 80 "$S/data/tombstones/$tb" 2>/dev/null | head -c 4096
+        done
+    fi
+    printf '\n=== Kernel Diagnostics (oom/lmkd/binder/bpf/avc) ===\n'
+    dmesg 2>/dev/null | grep -E 'oom|lmkd|lowmemorykiller|Out of memory|Killed process|binder|bpf|avc:|servicemanager|zygote|system_server' | tail -n 80 | tail -c 8192
+} > "$TMP" 2>&1
+tail -c 64512 "$TMP" > "$OUT" 2>/dev/null && mv -f "$TMP" "$S/guest_crash.log.full" 2>/dev/null || mv -f "$TMP" "$OUT" 2>/dev/null
+rm -f "$S/guest_crash.log.full"
+chmod 644 "$OUT" 2>/dev/null || true
+CRASHCAP
+chmod 755 "$STAGE/tmp/capture_guest_crash.sh" 2>/dev/null || true
+rm -f "$STAGE/guest_crash.log"
 if [ "${ONEOS_LOGCAT:-1}" = 1 ]; then
     # Every earlier one, by its command line (0.5.20): the saved pid missed some, and the two-hour
     # timeout does not count while the phone sleeps, so readers from earlier sessions piled up (A36
@@ -1016,9 +1061,11 @@ if [ "${ONEOS_LOGCAT:-1}" = 1 ]; then
         kill "$swp" 2>/dev/null
     done
     [ -f "$STAGE/sound_watch.log" ] && mv -f "$STAGE/sound_watch.log" "$STAGE/sound_watch.prev"
-    $BB setsid $BB timeout 7200 logcat -b main,system,crash -v threadtime -f "$STAGE/sound_watch.log" -r 2048 -n 1 -s \
+    SW_VIB_TAGS=""
+    [ "${ONEOS_VERBOSE_SOUND_LOG:-0}" = 1 ] && SW_VIB_TAGS="VibratorManagerService:V VibratorManagerServiceExtImpl:V VibrationThread:V VibrationScaler:V"
+    $BB setsid $BB timeout 7200 logcat -b main,system,crash -v threadtime ${SW_SINCE:+-T "$SW_SINCE"} -f "$STAGE/sound_watch.log" -r 2048 -n 1 -s \
         AndroidRuntime:E DEBUG:F Telecom:I Telecom_INCOMING_RINGING:V Ringtone:V RingtoneManager:V \
-        VibratorManagerService:V VibratorManagerServiceExtImpl:V VibrationThread:V VibrationScaler:V \
+        $SW_VIB_TAGS \
         SecVibrator-HAL-AIDL-CORE:V AHAL_StreamOut_QTI:D EffectOffloadImpl:V AHAL_EffectFactoryQti:V \
         AHAL_DlbSpatializerEffectImpl:V DlbDap2Process:V \
         AudioFlinger:W APM_AudioPolicyManager:W AHAL:W AHAL_ModulePrimary:W AHAL_StreamPrimary_exynos:W \
@@ -1741,10 +1788,18 @@ $BB sh -c "
         {
             echo \"--- \$(date +%T)\"
             ip -4 -o addr show wlan0 2>&1 | awk '{print \$4}'
-            ip rule show 2>&1 | awk 'NR <= 6 || /^14999:/ || / iif [^l][^ ]* lookup /'
+            ip -o link show dev wlan0 2>&1
+            ip rule show 2>&1 | awk 'NR <= 12 || /^1499[89]:/ || / iif [^l][^ ]* lookup /'
             ip route show table 4242 2>&1
             [ -d /sys/class/net/swlan0 ] && echo \"swlan0: \$(ip -4 -o addr show swlan0 2>/dev/null | awk '{print \$4}'), ip_forward \$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)\"
-            ping -c 1 -W 2 \$(ip route show table 4242 2>/dev/null | awk '/default/{print \$3; exit}') >/dev/null 2>&1 && echo gateway: ok || echo gateway: unreachable
+            gw=\$(ip route show table 4242 2>/dev/null | awk '/default/{print \$3; exit}')
+            if [ -z \"\$gw\" ]; then
+                echo \"gateway: unreachable (no default route in table 4242)\"
+            elif pout=\$(ping -c 1 -W 2 \"\$gw\" 2>&1); then
+                echo \"gateway: ok (\$gw)\"
+            else
+                echo \"gateway: unreachable (\$gw; \$(printf '%s' \"\$pout\" | tr '\n' ';' | cut -c1-160); neigh: \$(ip neigh show dev wlan0 2>/dev/null | tr '\n' ';'))\"
+            fi
         } 2>&1
         # Watch One UI's APEX backing files: after earlier sessions One UI's
         # decompressed APEXes read back with dm-verity I/O errors.
@@ -4675,17 +4730,19 @@ if [ "$GUEST_OPLUS" != 1 ] && [ "${ONEOS_GUEST_SF_PIN:-1}" != 0 ] && [ -r /sys/c
         sf=0
         if [ \$on = 1 ] && [ \$hz -ge 48 ] && [ \$hz -lt 110 ]; then
             P=\$(pidof system_server | awk '{print \$1}')
+            [ -n \"\$P\" ] || P=\$(pidof surfaceflinger | awk '{print \$1}')
             [ -n \"\$P\" ] && sf=\$(timeout 10 $BB nsenter -t \$P -m /system/bin/sh /data/oneos_genv.sh /system/bin/dumpsys SurfaceFlinger 2>/dev/null | sed -n 's/.*activeMode={id=[0-9]*,.*vsyncRate=\\([0-9]*\\).*/\\1/p' | head -n 1)
             case \"\$sf\" in ''|*[!0-9]*) sf=0 ;; esac
         fi
         if [ \$sf -ge \$((hz + 20)) ]; then mis=\$((mis + 1)); else mis=0; fi
         if { [ \$low -ge 2 ] || [ \$mis -ge 2 ]; } && [ \$kicks -lt 40 ] && [ -f $STAGE/data/oneos_sf_kick.sh ]; then
             P=\$(pidof system_server | awk '{print \$1}')
+            [ -n \"\$P\" ] || P=\$(pidof surfaceflinger | awk '{print \$1}')
             out=''
             [ -n \"\$P\" ] && out=\$(timeout 30 $BB nsenter -t \$P -m /system/bin/sh /data/oneos_genv.sh /system/bin/sh /data/oneos_sf_kick.sh 2>&1 | tr '\\n' ';' | cut -c1-400)
             kicks=\$((kicks + 1)); low=0; mis=0
             sleep 1
-            echo \"\$(date +%T) panel at \$hz Hz (guest mode \$sf Hz) with the screen on: \${out:-no guest system_server}; now \$(cut -d' ' -f1 /sys/class/lcd/panel/vrr 2>/dev/null) Hz\" >> \$F
+            echo \"\$(date +%T) panel at \$hz Hz (guest mode \$sf Hz) with the screen on: \${out:-no guest system_server/surfaceflinger}; now \$(cut -d' ' -f1 /sys/class/lcd/panel/vrr 2>/dev/null) Hz\" >> \$F
         fi
         sleep 15
     done
@@ -5117,6 +5174,7 @@ if [ "$RETURN_MAX" -gt 0 ]; then
                 dead=\$((dead + 10))
                 if [ \$dead -ge 30 ]; then
                     echo \"\$(date) guest zygote/system_server gone for \${dead}s after \${t}s, returning to One UI\"
+                    /system/bin/sh $STAGE/tmp/capture_guest_crash.sh \"guest_dead_after_\${t}s\" 2>/dev/null || true
                     exec /system/bin/sh $STAGE/return_to_oneui.sh
                 fi
             fi
@@ -5132,6 +5190,7 @@ if [ "$RETURN_MAX" -gt 0 ]; then
                 sfgone=\$((sfgone + 10))
                 if [ \$sfgone -ge 30 ]; then
                     echo \"\$(date) black screen after \${t}s (the guest's surfaceflinger gone for \${sfgone}s, nothing restarts it), returning to One UI\"
+                    /system/bin/sh $STAGE/tmp/capture_guest_crash.sh \"surfaceflinger_gone_after_\${t}s\" 2>/dev/null || true
                     exec /system/bin/sh $STAGE/return_to_oneui.sh
                 fi
             fi
@@ -5168,6 +5227,7 @@ if [ "$RETURN_MAX" -gt 0 ]; then
             if pidof com.android.systemui >/dev/null; then sui=\$((sui + 10)); else sui=0; fi
             if [ \$t -ge $RETURN_BLACK ] && { ! pidof surfaceflinger >/dev/null || [ \$new_failed -gt 100 ] || { [ \$home = 0 ] && [ -z \"\$ba\" ] && { [ \$sui = 0 ] || [ \$sui -ge 60 ]; } && { [ \$wm = 0 ] || [ \$wmseen -ge 120 ]; }; }; }; then
                 echo \"\$(date) black screen after \${t}s (surfaceflinger: \$(pidof surfaceflinger), bootanimation: \$(pidof bootanimation), new failed frames: \$new_failed), returning to One UI\"
+                /system/bin/sh $STAGE/tmp/capture_guest_crash.sh \"black_screen_after_\${t}s\" 2>/dev/null || true
                 exec /system/bin/sh $STAGE/return_to_oneui.sh
             fi
             if [ $SESSION_MAX -gt 0 ] && [ \$total -ge $SESSION_MAX ]; then
@@ -5177,6 +5237,7 @@ if [ "$RETURN_MAX" -gt 0 ]; then
             [ \$home = 1 ] && [ \$t -ge $((RETURN_MAX - 10)) ] && t=$((RETURN_MAX - 20))
         done
         echo \"\$(date) guest still not booted after ${RETURN_MAX}s, returning to One UI\"
+        /system/bin/sh $STAGE/tmp/capture_guest_crash.sh \"boot_timeout_\${RETURN_MAX}s\" 2>/dev/null || true
         exec /system/bin/sh $STAGE/return_to_oneui.sh
     " </dev/null >>"$STAGE/auto_return.log" 2>&1 &
     echo "Auto-return to One UI armed: ${RETURN_BLACK}s on a black screen, ${RETURN_MAX}s at most"

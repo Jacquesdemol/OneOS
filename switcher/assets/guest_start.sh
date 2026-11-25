@@ -85,7 +85,7 @@ if awk '$5 ~ "^/postinstall(/|$)"' /proc/self/mountinfo | grep -q .; then
 fi
 echo "[Pivoted Root] Host root detached from /postinstall"
 
-export PATH=/system/bin:/system/xbin
+export PATH=/system/bin:/system/xbin:/data/oneos_bin
 
 # OneOS: /mnt and /storage came in from the host, and its pass_through,
 # installer, androidwritable, runtime and user views are binds of the phone's
@@ -2837,7 +2837,7 @@ fi
 if [ "${ONEOS_GUEST_ADBD:-0}" = 1 ] && [ -f /data/oneos_host_adb ] && [ -x /apex/com.android.adbd/bin/adbd ]; then
     cat > /data/oneos_guest_adbd.sh <<'GADBD'
 #!/system/bin/sh
-export PATH=/system/bin:/system/xbin:/vendor/bin:/apex/com.android.adbd/bin:$PATH
+export PATH=/system/bin:/system/xbin:/data/oneos_bin:/vendor/bin:/apex/com.android.adbd/bin:$PATH
 BB=$ONEOS_BB
 [ -n "$BB" ] || BB=$(which busybox 2>/dev/null)
 LOG=/data/oneos_guest_adbd.log
@@ -2878,7 +2878,7 @@ start_adbd() {
     ONEOS_BB="$BB" "$BB" unshare -m /system/bin/sh -c '
         [ -d /dev/usb-ffs/adb ] && "$ONEOS_BB" mount -t tmpfs -o size=64k,ro tmpfs /dev/usb-ffs/adb 2>/dev/null || true
         unset ANDROID_SOCKET_adbd
-        export PATH=/system/bin:/system/xbin:/vendor/bin:/apex/com.android.adbd/bin
+        export PATH=/system/bin:/system/xbin:/data/oneos_bin:/vendor/bin:/apex/com.android.adbd/bin
         export ANDROID_ROOT=/system ANDROID_DATA=/data TMPDIR=/data/local/tmp
         exec /apex/com.android.adbd/bin/adbd --root_seclabel=u:r:su:s0
     ' </dev/null >> "$LOG" 2>&1 &
@@ -3440,30 +3440,37 @@ if [ "$ONEOS_GUEST_ODREFRESH" = 1 ] && [ "$ONEOS_GUEST_JIT_ZYGOTE" != 1 ] && [ -
                ls -lnL "$j" 2>/dev/null | awk '{ print $5, $6, $7, $NF }'
            done | cksum 2>/dev/null | awk '{ print $1 "-" $2 }')
     t0=$(date +%s)
-    timeout 300 "$ODR" --compile > /data/odrefresh.log 2>&1; rc=$?
     # odrefresh takes the image's own primary boot image as usable and compiles only
     # the mainline extension on top of it, which dex2oat cannot load (OneOS's
-    # framework.jar), and aborts in no time (thirteenth run: 0 files). Without a boot
-    # image of the guest's own yet: all of it, once.
-    if [ ! -f "$ADC/dalvik-cache/arm64/boot.art" ]; then
-        echo "--- no boot image of the guest's own after --compile (exit $rc): --force-compile" >> /data/odrefresh.log
+    # framework.jar), and aborts with SIGABRT in InitWithoutImage (0 files). When no
+    # guest boot.art exists yet, or the boot/system-server jars changed, skip --compile
+    # and run --force-compile directly.
+    if [ ! -f "$ADC/dalvik-cache/arm64/boot.art" ] ||
+       { [ -n "$JARS" ] && [ "$(cat "$ADC/oneos_jars" 2>/dev/null)" != "$JARS" ]; }; then
+        echo "--- missing guest boot.art or changed jars: --force-compile" > /data/odrefresh.log
         timeout 300 "$ODR" --force-compile >> /data/odrefresh.log 2>&1; rc=$?
     else
-        # odrefresh died instead of answering (ColorOS 17 trial, 11-10: exit 134,
-        # "assertion hasLastUpdateMillis() failed" on a module list entry;
-        # guest_prepare.sh gives every entry one now): its artifacts were not
-        # checked. Kept while the jars are the ones they were made from (ART
-        # checks the checksums itself and would only fall back to compiling in
-        # memory); other jars, after an update of the stage: all of it, once.
-        case "$rc" in
-            0|79|80|81|82|124) ;;
-            *) if [ -n "$JARS" ] && [ "$(cat "$ADC/oneos_jars" 2>/dev/null)" != "$JARS" ]; then
-                   echo "--- --compile ended with exit $rc and the jars are not the ones the artifacts were made from: --force-compile" >> /data/odrefresh.log
-                   timeout 300 "$ODR" --force-compile >> /data/odrefresh.log 2>&1; rc=$?
-               else
-                   echo "--- --compile ended with exit $rc; the jars are the ones the artifacts were made from: kept" >> /data/odrefresh.log
-               fi ;;
-        esac
+        timeout 300 "$ODR" --compile > /data/odrefresh.log 2>&1; rc=$?
+        if [ ! -f "$ADC/dalvik-cache/arm64/boot.art" ]; then
+            echo "--- no boot image of the guest's own after --compile (exit $rc): --force-compile" >> /data/odrefresh.log
+            timeout 300 "$ODR" --force-compile >> /data/odrefresh.log 2>&1; rc=$?
+        else
+            # odrefresh died instead of answering (ColorOS 17 trial, 11-10: exit 134,
+            # "assertion hasLastUpdateMillis() failed" on a module list entry;
+            # guest_prepare.sh gives every entry one now): its artifacts were not
+            # checked. Kept while the jars are the ones they were made from (ART
+            # checks the checksums itself and would only fall back to compiling in
+            # memory); other jars, after an update of the stage: all of it, once.
+            case "$rc" in
+                0|79|80|81|82|124) ;;
+                *) if [ -n "$JARS" ] && [ "$(cat "$ADC/oneos_jars" 2>/dev/null)" != "$JARS" ]; then
+                       echo "--- --compile ended with exit $rc and the jars are not the ones the artifacts were made from: --force-compile" >> /data/odrefresh.log
+                       timeout 300 "$ODR" --force-compile >> /data/odrefresh.log 2>&1; rc=$?
+                   else
+                       echo "--- --compile ended with exit $rc; the jars are the ones the artifacts were made from: kept" >> /data/odrefresh.log
+                   fi ;;
+            esac
+        fi
     fi
     case "$rc" in
         0|80) [ -n "$JARS" ] && [ -f "$ADC/dalvik-cache/arm64/boot.art" ] && echo "$JARS" > "$ADC/oneos_jars" ;;

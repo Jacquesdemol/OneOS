@@ -2098,6 +2098,21 @@ ro.miui.backdrop_sampling_enabled=true"
         echo "$key=$h" >> "$OVR" && "$RP" -n "$key" false 2>/dev/null &&
             echo "guest_props: $key=false for the session (the guest never drives One UI's composd)"
     fi
+    # Cap dex2oat threads and heap during guest boot to prevent -j8 CPU/swap thrash (kswapd0).
+    # Recorded in OVR/ADDED so `remove` restores One UI's exact host values on return.
+    if [ "${ONEOS_DEX2OAT_BOOT_CAP:-1}" = 1 ]; then
+        for pair in "dalvik.vm.boot-dex2oat-threads=2" "dalvik.vm.dex2oat-threads=2" "dalvik.vm.dex2oat-Xmx=256m" "dalvik.vm.dex2oat-minidebuginfo=false"; do
+            key=${pair%%=*}; val=${pair#*=}
+            h=$(getprop "$key")
+            [ "$h" = "$val" ] && continue
+            if getprop | grep -qF "[$key]: ["; then
+                printf '%s=%s\n' "$key" "$h" >> "$OVR"
+            else
+                printf '%s\n' "$key" >> "$ADDED"
+            fi && "$RP" -n "$key" "$val" 2>/dev/null &&
+                echo "guest_props: $key=$val for the session (host: ${h:-unset})"
+        done
+    fi
     ;;
 remove)
     # Host values add overrode for the session (blur, sound names, audio HAL

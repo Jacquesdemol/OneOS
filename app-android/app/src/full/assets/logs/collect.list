@@ -71,7 +71,7 @@ f="$S/session.env"
 [ -f "$f" ] || exit 3
 cat "$f"'
 
-#: The switch, return and watcher logs in the stage (takeover_app.log, auto_return.log, ...).
+#: The switch, return, crash snapshot, and watcher logs in the stage (takeover_app.log, auto_return.log, guest_crash.log, ...).
 files logs.stage 120 stage '
 S=/data/local/tmp/oneos
 [ -e "$S" ] || [ -L "$S" ] || [ ! -d /data/local/tmp/lineage_stage ] || [ -L /data/local/tmp/lineage_stage ] || S=/data/local/tmp/lineage_stage

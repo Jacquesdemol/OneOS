@@ -464,6 +464,8 @@ if "$DEBUGFS" -R "cat /system/build.prop" "$IMG" 2>/dev/null | grep -q '^ro.buil
     # Set r6: VaultKeeperService unsupported when no ISehVaultKeeper HAL is registered (S23 family:
     # DmcService's boot-completed phase waited for it forever, setup wizard stuck, watchdog).
     KEY_DIRS="$KEY_DIRS $(python3 -I "$ROOT/switcher/patches/oneui_vaultkeeper_unreachable.py" "$WORK/services")" || exit 1
+    # Avoid 1s lazy-service polling when ISehRealTimeToken/default is not declared in host VINTF.
+    KEY_DIRS="$KEY_DIRS $(python3 -I "$ROOT/switcher/patches/oneui_rtts_undeclared.py" "$WORK/services")" || exit 1
     # Set r6: a vendor <signer> stanza emptied by ignore_mac_permissions_package is dropped, not fatal
     # ("Unable to load SELinux MMAC policy" on the A07, S23 and Fold8).
     KEY_DIRS="$KEY_DIRS $(python3 -I "$ROOT/switcher/patches/oneui_mmac_empty_signer.py" "$WORK/services")" || exit 1

@@ -50,6 +50,7 @@ for f in \$L/head/*; do
   mkdir -p $TMP/head && cp \$f $TMP/head/
 done
 cp -r \$S/*.log \$S/diag_* $TMP/ 2>/dev/null
+[ -f \$S/guest_crash.log ] && cp \$S/guest_crash.log $TMP/ 2>/dev/null
 cp \$S/data/takeover.log $TMP/takeover_inner.log 2>/dev/null
 # Every other .log the guest wrote in its own /data (call_audio, audio_keeper,
 # oneos_a2dp, backlight, oneos_composer_before_sf, ...). The collector of the app

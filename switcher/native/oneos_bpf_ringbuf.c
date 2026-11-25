@@ -63,50 +63,124 @@ static long sys_bpf(int cmd, union bpf_attr *attr) {
     return syscall(__NR_bpf, cmd, attr, sizeof(*attr));
 }
 
-/* The SELinux label of another entry in the same folder (the module's own maps). */
-static int copy_label(const char *path) {
-    char dir[512], label[256], probe[1024];
+/* Resolve SELinux context from parent bpffs dir first (e.g. /sys/fs/bpf/netd_shared), else sibling pins. */
+static int resolve_pin_label(const char *path, int is_prog, char *label, size_t label_cap, ssize_t *label_len) {
+    char dir[512], probe[1024];
     snprintf(dir, sizeof(dir), "%s", path);
     char *slash = strrchr(dir, '/');
     if (!slash) return -1;
     *slash = 0;
-    DIR *d = opendir(dir);
-    if (!d) return -1;
-    struct dirent *e;
-    ssize_t n = -1;
-    while ((e = readdir(d))) {
-        if (e->d_name[0] == '.' || strncmp(e->d_name, "map_", 4) != 0) continue;
-        snprintf(probe, sizeof(probe), "%s/%s", dir, e->d_name);
-        if (strcmp(probe, path) == 0) continue;
-        n = getxattr(probe, "security.selinux", label, sizeof(label));
-        if (n > 0) break;
+
+    *label_len = -1;
+    ssize_t dn = getxattr(dir, "security.selinux", label, label_cap - 1);
+    if (dn > 0) {
+        label[dn] = '\0';
+        *label_len = (ssize_t)strlen(label);
+        if (*label_len > 0) return 0;
     }
-    closedir(d);
-    if (n <= 0) return -1;
-    return setxattr(path, "security.selinux", label, (size_t)n, 0);
+
+    const char *want = is_prog ? "prog_" : "map_";
+    size_t want_len = strlen(want);
+    for (int pass = 0; pass < 2; pass++) {
+        DIR *d = opendir(dir);
+        if (!d) return -1;
+        struct dirent *e;
+        while ((e = readdir(d))) {
+            if (e->d_name[0] == '.') continue;
+            if (pass == 0 && strncmp(e->d_name, want, want_len) != 0) continue;
+            snprintf(probe, sizeof(probe), "%s/%s", dir, e->d_name);
+            if (strcmp(probe, path) == 0) continue;
+            ssize_t n = getxattr(probe, "security.selinux", label, label_cap - 1);
+            if (n > 0) {
+                label[n] = '\0';
+                *label_len = (ssize_t)strlen(label);
+                if (*label_len > 0) {
+                    closedir(d);
+                    return 0;
+                }
+            }
+        }
+        closedir(d);
+    }
+    return -1;
 }
 
-/* The label of another program in the same folder, else of a map there. */
-static int copy_prog_label(const char *path) {
-    char dir[512], label[256], probe[1024];
-    snprintf(dir, sizeof(dir), "%s", path);
-    char *slash = strrchr(dir, '/');
-    if (!slash) return -1;
-    *slash = 0;
-    DIR *d = opendir(dir);
-    if (!d) return -1;
-    struct dirent *e;
-    ssize_t n = -1;
-    while ((e = readdir(d))) {
-        if (strncmp(e->d_name, "prog_", 5) != 0) continue;
-        snprintf(probe, sizeof(probe), "%s/%s", dir, e->d_name);
-        if (strcmp(probe, path) == 0) continue;
-        n = getxattr(probe, "security.selinux", label, sizeof(label));
-        if (n > 0) break;
+static int open_fscreate(void) {
+    int fd = open("/proc/thread-self/attr/fscreate", O_WRONLY | O_CLOEXEC);
+    if (fd < 0) fd = open("/proc/self/attr/fscreate", O_WRONLY | O_CLOEXEC);
+    return fd;
+}
+
+/*
+ * Pin BPF fd at path with SELinux context applied at creation time via fscreate,
+ * since Linux 5.10 bpffs rejects post-creation setxattr(..., "security.selinux", ...) with EOPNOTSUPP.
+ * Ownership/mode match host bpfloader: root:net_bw_acct (0:1006) 0660 for maps, root:root (0:0) 0440 for progs.
+ */
+static int pin_bpf_object(const char *path, int fd, int is_prog, mode_t mode) {
+    char label[256];
+    ssize_t label_len = -1;
+    uid_t uid = 0;
+    gid_t gid = is_prog ? 0 : 1006;
+    int have_label = (resolve_pin_label(path, is_prog, label, sizeof(label), &label_len) == 0);
+
+    int fs_fd = -1;
+    int fscreate_ok = 0;
+    if (have_label) {
+        fs_fd = open_fscreate();
+        if (fs_fd >= 0) {
+            size_t wlen = (size_t)label_len + 1; /* include trailing NUL for procfs fscreate */
+            if (label_len > 0 && write(fs_fd, label, wlen) == (ssize_t)wlen) {
+                fscreate_ok = 1;
+            } else {
+                fprintf(stderr, "fscreate write('%s') failed for %s: %s\n", label, path, strerror(errno));
+            }
+        } else {
+            fprintf(stderr, "open fscreate failed for %s: %s\n", path, strerror(errno));
+        }
     }
-    closedir(d);
-    if (n <= 0) return copy_label(path);
-    return setxattr(path, "security.selinux", label, (size_t)n, 0);
+
+    union bpf_attr a;
+    memset(&a, 0, sizeof(a));
+    a.pathname = (uint64_t)(uintptr_t)path;
+    a.bpf_fd = (uint32_t)fd;
+    long pin_rc = sys_bpf(BPF_OBJ_PIN, &a);
+    int pin_err = errno;
+
+    if (fs_fd >= 0) {
+        if (fscreate_ok) {
+            ssize_t clr = write(fs_fd, "", 0);
+            (void)clr;
+        }
+        close(fs_fd);
+    }
+
+    if (pin_rc != 0) {
+        errno = pin_err;
+        perror("BPF_OBJ_PIN");
+        return -1;
+    }
+
+    if (chown(path, uid, gid) != 0) perror("chown");
+    if (chmod(path, mode) != 0) perror("chmod");
+
+    if (have_label) {
+        char got[256];
+        ssize_t gn = getxattr(path, "security.selinux", got, sizeof(got) - 1);
+        int matches = 0;
+        if (gn > 0) {
+            got[gn] = '\0';
+            matches = (strcmp(got, label) == 0);
+        }
+        if (!matches) {
+            if (setxattr(path, "security.selinux", label, (size_t)label_len + 1, 0) != 0) {
+                fprintf(stderr, "no SELinux label copied for %s (want=%s got=%s fscreate=%s setxattr=%s)\n",
+                        path, label, gn > 0 ? got : "none", fscreate_ok ? "ok" : "err", strerror(errno));
+            }
+        }
+    } else {
+        fprintf(stderr, "no SELinux label copied for %s (no labeled dir/sibling found)\n", path);
+    }
+    return 0;
 }
 
 static int sockops_create(const char *path) {
@@ -128,14 +202,9 @@ static int sockops_create(const char *path) {
     a.expected_attach_type = BPF_CGROUP_SOCK_OPS;
     long fd = sys_bpf(BPF_PROG_LOAD, &a);
     if (fd < 0) { perror("BPF_PROG_LOAD"); return 1; }
-    memset(&a, 0, sizeof(a));
-    a.pathname = (uint64_t)(uintptr_t)path;
-    a.bpf_fd = (uint32_t)fd;
-    if (sys_bpf(BPF_OBJ_PIN, &a) != 0) { perror("BPF_OBJ_PIN"); close((int)fd); return 1; }
+    int rc = pin_bpf_object(path, (int)fd, 1, 0440);
     close((int)fd);
-    if (chown(path, 0, 1000) != 0) perror("chown");
-    if (chmod(path, 0440) != 0) perror("chmod");
-    if (copy_prog_label(path) != 0) fprintf(stderr, "no SELinux label copied for %s\n", path);
+    if (rc != 0) return 1;
     printf("created %s (socket-ops program that returns 1)\n", path);
     return 0;
 }
@@ -212,14 +281,9 @@ static int ringbuf_alias(const char *src, const char *path) {
     a.info.info = (uint64_t)(uintptr_t)&info;
     if (sys_bpf(BPF_OBJ_GET_INFO_BY_FD, &a) != 0) { perror("BPF_OBJ_GET_INFO_BY_FD"); close((int)fd); return 1; }
     if (info.type != BPF_MAP_TYPE_RINGBUF) { fprintf(stderr, "%s is not a ring buffer (type %u)\n", src, info.type); close((int)fd); return 1; }
-    memset(&a, 0, sizeof(a));
-    a.pathname = (uint64_t)(uintptr_t)path;
-    a.bpf_fd = (uint32_t)fd;
-    if (sys_bpf(BPF_OBJ_PIN, &a) != 0) { perror("BPF_OBJ_PIN"); close((int)fd); return 1; }
+    int rc = pin_bpf_object(path, (int)fd, 0, 0660);
     close((int)fd);
-    if (chown(path, 0, 1000) != 0) perror("chown");
-    if (chmod(path, 0660) != 0) perror("chmod");
-    if (copy_label(path) != 0) fprintf(stderr, "no SELinux label copied for %s\n", path);
+    if (rc != 0) return 1;
     printf("pinned %s at %s (ring buffer id %u, %u bytes)\n", src, path, info.id, info.max_entries);
     return 0;
 }
@@ -239,14 +303,9 @@ static int array_create(const char *path, unsigned long key, unsigned long value
     a.max_entries = (uint32_t)entries;
     long fd = sys_bpf(BPF_MAP_CREATE, &a);
     if (fd < 0) { perror("BPF_MAP_CREATE"); return 1; }
-    memset(&a, 0, sizeof(a));
-    a.pathname = (uint64_t)(uintptr_t)path;
-    a.bpf_fd = (uint32_t)fd;
-    if (sys_bpf(BPF_OBJ_PIN, &a) != 0) { perror("BPF_OBJ_PIN"); close((int)fd); return 1; }
+    int rc = pin_bpf_object(path, (int)fd, 0, 0660);
     close((int)fd);
-    if (chown(path, 0, 1000) != 0) perror("chown");
-    if (chmod(path, 0660) != 0) perror("chmod");
-    if (copy_label(path) != 0) fprintf(stderr, "no SELinux label copied for %s\n", path);
+    if (rc != 0) return 1;
     printf("created %s (array, key %lu, value %lu, %lu entries)\n", path, key, value, entries);
     return 0;
 }
@@ -278,14 +337,9 @@ int main(int argc, char **argv) {
     a.max_entries = (uint32_t)bytes;
     long fd = sys_bpf(BPF_MAP_CREATE, &a);
     if (fd < 0) { perror("BPF_MAP_CREATE"); return 1; }
-    memset(&a, 0, sizeof(a));
-    a.pathname = (uint64_t)(uintptr_t)path;
-    a.bpf_fd = (uint32_t)fd;
-    if (sys_bpf(BPF_OBJ_PIN, &a) != 0) { perror("BPF_OBJ_PIN"); close((int)fd); return 1; }
+    int rc = pin_bpf_object(path, (int)fd, 0, 0660);
     close((int)fd);
-    if (chown(path, 0, 1000) != 0) perror("chown");
-    if (chmod(path, 0660) != 0) perror("chmod");
-    if (copy_label(path) != 0) fprintf(stderr, "no SELinux label copied for %s\n", path);
+    if (rc != 0) return 1;
     printf("created %s (%lu bytes)\n", path, bytes);
     return 0;
 }

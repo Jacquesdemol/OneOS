@@ -625,6 +625,9 @@ fi
 # and reboot cleanly. ONEOS_RETURN_MODE=inplace: see below.
 # The session's sound watch ends with it (0.5.20): left to its two-hour timeout, which stops while the phone
 # sleeps, it read the log in One UI for hours and the next sessions piled up more of them.
+if [ ! -s "$S/guest_crash.log" ] && [ -x "$S/tmp/capture_guest_crash.sh" ]; then
+    /system/bin/sh "$S/tmp/capture_guest_crash.sh" "return_to_oneui" 2>/dev/null || true
+fi
 for p in $(pgrep -f "^logcat .*/data/local/tmp/oneos/sound_watch.log" 2>/dev/null) $(pgrep -f "timeout 7200 logca[t] .*/data/local/tmp/oneos/sound_watch.log" 2>/dev/null); do
     kill "$p" 2>/dev/null
 done
@@ -1310,7 +1313,15 @@ while :; do
 done
 
 exec 9<&-
-ip rule show 2>/dev/null | "$BB" diff "$BASE/iprule" - >> "$IPLOG" 2>&1 || say "!!! ip rules differ from the switch (diff in return_inplace.log)"
+ip rule show 2>/dev/null | awk '
+    /^14998:/ || /^14999:/ || /lookup 4242([[:space:]]|$)/ { print "LEFTOVER_ONEOS_RULE: " $0; fail = 1 }
+    { gsub(/fwmark 0x(1|5)?[0-9a-f]+\/0x1?ffff/, "fwmark 0xNETID/0xMASK"); print }
+    END { exit fail }
+' > "$S/iprule.now.norm" 2>> "$IPLOG"
+"$BB" sed -E 's/fwmark 0x(1|5)?[0-9a-f]+\/0x1?ffff/fwmark 0xNETID\/0xMASK/g' "$BASE/iprule" > "$S/iprule.base.norm" 2>/dev/null
+"$BB" diff "$S/iprule.base.norm" "$S/iprule.now.norm" >> "$IPLOG" 2>&1 ||
+    say "!!! ip rules differ from the switch (diff in return_inplace.log)"
+rm -f "$S/iprule.base.norm" "$S/iprule.now.norm"
 # One UI is up. RescueParty back to the stored value, the modules read through
 # their filesystems (safe now: Gate A read them below), the session's logcat
 # capture and the wakelock end.
