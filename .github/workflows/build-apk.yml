@@ -1,0 +1,105 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  validate-and-build:
+    runs-on: ubuntu-latest
+    env:
+      GH_PACKAGES_USER: ${{ github.actor }}
+      GH_PACKAGES_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install shell and test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y busybox-static dash python3
+
+      - name: Run shell syntax and Python unit tests
+        run: |
+          set -euo pipefail
+          for f in switcher/assets/*.sh scripts/*.sh; do
+            [ -f "$f" ] || continue
+            sh -n "$f"
+          done
+          python3 scripts/test-boot-fixes.py
+          for t in \
+            scripts/test-audio-hal-stale-restart.py \
+            scripts/test-guest-fingerprint-aidl.py \
+            scripts/test-guest-root.py \
+            scripts/test-guest-controls.py \
+            scripts/test-guest-installer-helpers.py \
+            scripts/test-verified-overlays.py \
+            scripts/test-launch-switch-verdict.py \
+            scripts/test-guest-local-lock.py; do
+            [ -f "$t" ] || continue
+            python3 "$t"
+          done
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK platforms and build-tools
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "build-tools;35.0.0" "platforms;android-36"
+          sdkmanager "platforms;android-37" || true
+
+      - name: Setup Gradle caching
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Detect release signing secrets and build APK
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          chmod +x app-android/gradlew scripts/build-guest-manager.sh
+
+          if [ -n "${KEYSTORE_BASE64:-}" ] && [ -n "${KEYSTORE_PASSWORD:-}" ] && [ -n "${KEY_ALIAS:-}" ] && [ -n "${KEY_PASSWORD:-}" ]; then
+            echo "Release keystore secrets detected; preparing release build..."
+            mkdir -p "$HOME/.oneos-release"
+            echo "$KEYSTORE_BASE64" | base64 --decode > "$HOME/.oneos-release/release.jks"
+            cat > "$HOME/.oneos-release/keystore.properties" <<EOF
+          storeFile=$HOME/.oneos-release/release.jks
+          storePassword=$KEYSTORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+            ./scripts/build-guest-manager.sh release
+            (cd app-android && ./gradlew :app:assembleRelease --no-daemon)
+            BUILD_VARIANT="release"
+          else
+            echo "No release keystore secrets configured; running debug build..."
+            ./scripts/build-guest-manager.sh debug
+            (cd app-android && ./gradlew :app:assembleDebug --no-daemon)
+            BUILD_VARIANT="debug"
+          fi
+
+          APP_VER="$(sed -n 's/.*versionName *= *"\([^"]*\)".*/\1/p' app-android/app/build.gradle.kts | head -n 1)"
+          SHORT_SHA="$(git rev-parse --short HEAD)"
+          mkdir -p dist/apk
+          find app-android/app/build/outputs/apk -type f -name '*.apk' -exec cp {} dist/apk/ \;
+          ls -lh dist/apk/
+          echo "ARTIFACT_NAME=oneos-apk-v${APP_VER:-0.0.0}-${SHORT_SHA}-${BUILD_VARIANT}" >> "$GITHUB_ENV"
+
+      - name: Upload APK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: dist/apk/*.apk
+          retention-days: 30

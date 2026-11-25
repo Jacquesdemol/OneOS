@@ -1585,6 +1585,42 @@ if [ -f /data/guest_audio.flag ]; then
             echo "$(date +%T) A2dpSuspended=false to the HAL before Bluetooth connects (Samsung SoC): $r"
         }
         unsusp
+        restart_hal() {
+            hs=$(getprop | sed -n "s/^\[init\.svc\.\(vendor\.audio-hal[^]]*\)\]: \[running\]\$/\1/p" | tr "\n" " ")
+            if [ -n "$hs" ]; then
+                for s in $hs; do setprop ctl.stop $s; done
+                sleep 1
+                for s in $hs; do setprop ctl.start $s; done
+                sleep 1
+                echo "$(date +%T) audio HAL services restarted for the new audioserver: $hs"
+            fi
+        }
+        # 0.5.45 / 0.5.46-antigravity: disabling the Google app DSP hotword stops both Exynos VTS HAL
+        # crashes (vts_load_sound_model) and Qualcomm PAL/ADSP PD crash loops (msm/adsp/audio_pd
+        # crashing inside SoundTriggerEngineGsl: ProcessStartRecognition while audioserver stays alive).
+        hotword_off() {
+            [ ! -f /data/oneos_hotword_off.log ] || return 1
+            why_hw=""
+            if [ "${1:-all}" = all ] && logcat -d -b crash -t 100 2>/dev/null | grep -q "(vts_load_sound_model+"; then
+                why_hw="vts_load_sound_model"
+            else
+                t=$(logcat -d -b main -t 250 -s "PAL: SoundTriggerEngineGsl:E" "PAL: StreamSoundTrigger:I" "PAL: SndMonitor:I" "COSR:I" "*:S" 2>/dev/null)
+                if echo "$t" | grep -q "SoundTriggerEngineGsl:.*Failed to start" ||
+                   { echo "$t" | grep -q "StreamSoundTrigger:.*LoadSoundModel" && echo "$t" | grep -q -E "ar_osal_pd_notifier_cb.*state.0..*msm/adsp/audio_pd|SndMonitor:.*card status 0"; }; then
+                    why_hw="qti_adsp_soundtrigger"
+                fi
+            fi
+            [ -n "$why_hw" ] || return 1
+            g=com.google.android.googlequicksearchbox
+            o=$(/system/bin/sh /data/oneos_genv.sh /system/bin/cmd appops set $g RECORD_AUDIO_HOTWORD ignore 2>&1 | tr -s " \n" " " | head -c 80)
+            /system/bin/sh /data/oneos_genv.sh /system/bin/am force-stop $g >/dev/null 2>&1
+            for hw in com.android.hotwordenrollment.okgoogle com.android.hotwordenrollment.xgoogle; do
+                /system/bin/sh /data/oneos_genv.sh /system/bin/cmd appops set $hw RECORD_AUDIO_HOTWORD ignore >/dev/null 2>&1
+                /system/bin/sh /data/oneos_genv.sh /system/bin/am force-stop $hw >/dev/null 2>&1
+            done
+            echo "$(date +%T) audio HAL hit sound trigger failure ($why_hw): Hey Google DSP hotword off for $g ($o)" | tee /data/oneos_hotword_off.log
+            return 0
+        }
         # Keep it the one servicemanager hands out (host init can bring
         # Samsung audioserver back through the HAL onrestart). Log why it
         # restarts. No apostrophes anywhere in this script: it is one
@@ -1598,27 +1634,30 @@ if [ -f /data/guest_audio.flag ]; then
         # 7, 23 and 27 minutes, the fifth handed over to Samsung audioserver, whose
         # product strategies carry Samsung usage 1005; a Pixel AudioService throws
         # Invalid usage 1005 and system_server died).
-        miss=0; r=0; last=0
+        miss=0; r=0; last=0; hwt=0
         while [ -f /data/guest_audio.flag ]; do
             sleep 3
             if ! kill -0 $as 2>/dev/null; then why="died"
             elif [ "$(owner)" != "$as" ]; then why="media.audio_policy taken"
-            else miss=0; continue; fi
+            else
+                miss=0
+                if [ ! -f /data/oneos_hotword_off.log ] && [ ! -f /data/oneos_hotword_preblocked ]; then
+                    hwt=$(( (hwt + 1) % 5 ))
+                    if [ $hwt = 0 ] && hotword_off qti; then
+                        sleep 2
+                        kill -9 $as 2>/dev/null
+                        restart_hal
+                        ([ -f /data/oneos_audio_rt ] && ulimit -r 99 2>/dev/null; exec /system/bin/audioserver) > /dev/null 2>&1 & as=$!
+                        echo "$(date +%T) guest audioserver restarted as $as after ADSP hotword failure"
+                        ( n=0; while [ $n -lt 30 ] && [ "$(owner)" != "$as" ]; do sleep 2; n=$((n + 1)); done; unsusp ) &
+                    fi
+                fi
+                continue
+            fi
             miss=$((miss + 1)); [ $miss -lt 2 ] && continue
             kill -9 $as 2>/dev/null
             now=$(date +%s); [ $((now - last)) -gt 120 ] && r=0; last=$now
-            # 0.5.45 (S23 FE One UI 8.5 8a093c12, d6be5a01): the Google app voice match model (110628 bytes) is
-            # larger than the VTS buffer of the Exynos sound trigger HAL (0x16800), which then died in
-            # vts_load_sound_model at every start of recognition, the audio HAL with it, every 75 s (17 deaths,
-            # no sound for most of the session). Once that is in the crash log: no DSP hotword for the Google app
-            # in this guest (RECORD_AUDIO_HOTWORD ignore, kept in its app ops; SoundTriggerHelper then starts no
-            # recognition) and the app stopped so it attaches again under that rule.
-            if [ ! -f /data/oneos_hotword_off.log ] && logcat -d -b crash 2>/dev/null | grep -q "(vts_load_sound_model+"; then
-                g=com.google.android.googlequicksearchbox
-                o=$(/system/bin/sh /data/oneos_genv.sh /system/bin/cmd appops set $g RECORD_AUDIO_HOTWORD ignore 2>&1 | tr -s " \n" " " | head -c 80)
-                /system/bin/sh /data/oneos_genv.sh /system/bin/am force-stop $g >/dev/null 2>&1
-                echo "$(date +%T) audio HAL died loading a voice wake-up model (vts_load_sound_model): Hey Google DSP hotword off for $g ($o)" | tee /data/oneos_hotword_off.log
-            fi
+            hotword_off all || true
             # 0.4.60: no hand-over after registration. Every guest framework is not
             # Samsung, and Samsung audioserver killed it (Invalid usage 1005; 0.4.59
             # Pixel reports 2c9c6419, 630e5625, 7fe453b5: a sound model Samsung sound
@@ -1636,14 +1675,7 @@ if [ -f /data/guest_audio.flag ]; then
             # has a stream opened on it"), so the new one got no output and the rest
             # of the session had no sound at all (S25 Ultra Pixel a18ecab9; A34
             # HyperOS c16c8f15: sound broke after a soft restart).
-            hs=$(getprop | sed -n "s/^\[init\.svc\.\(vendor\.audio-hal[^]]*\)\]: \[running\]\$/\1/p" | tr "\n" " ")
-            if [ -n "$hs" ]; then
-                for s in $hs; do setprop ctl.stop $s; done
-                sleep 1
-                for s in $hs; do setprop ctl.start $s; done
-                sleep 1
-                echo "$(date +%T) audio HAL services restarted for the new audioserver: $hs"
-            fi
+            restart_hal
             ([ -f /data/oneos_audio_rt ] && ulimit -r 99 2>/dev/null; exec /system/bin/audioserver) > /dev/null 2>&1 & as=$!; miss=0; r=$((r + 1))
             echo "$(date +%T) guest audioserver $why, restarted as $as"
             ( n=0; while [ $n -lt 30 ] && [ "$(owner)" != "$as" ]; do sleep 2; n=$((n + 1)); done; unsusp ) &
@@ -3976,6 +4008,37 @@ sm_diag() {
 }
 sm_diag "before zygote"
 ( sleep 45; sm_diag "45 s after zygote" ) &
+# Preventively block DSP hotword before googlequicksearchbox touches QTI SoundTrigger/ADSP,
+# and cancel any immediate post-boot bg-dexopt burst during the first minutes after switch.
+if [ "${ONEOS_GUEST_PREVENT_HOTWORD:-1}" = 1 ] || [ "${ONEOS_DEFER_BG_DEXOPT:-1}" = 1 ]; then
+    $BB sh -c '
+        prev_hw=$1; defer_dex=$2; force_hw=$3
+        self=$(readlink /proc/self/ns/mnt 2>/dev/null)
+        i=0
+        while [ $i -lt 180 ]; do
+            pkg_pid=$(timeout 2 dumpsys --pid package 2>/dev/null | tr -dc 0-9)
+            if [ -n "$self" ] && [ -n "$pkg_pid" ] && [ "$(readlink /proc/$pkg_pid/ns/mnt 2>/dev/null)" = "$self" ] &&
+               service check appops 2>/dev/null | grep -q ": found"; then
+                if [ "$prev_hw" = 1 ]; then
+                    if [ "$(getprop ro.soc.manufacturer)" = QTI ] || [ "$force_hw" = 1 ]; then
+                        for hw in com.google.android.googlequicksearchbox com.android.hotwordenrollment.okgoogle com.android.hotwordenrollment.xgoogle; do
+                            /system/bin/sh /data/oneos_genv.sh /system/bin/cmd appops set "$hw" RECORD_AUDIO_HOTWORD ignore >/dev/null 2>&1 || true
+                        done
+                        : > /data/oneos_hotword_preblocked
+                        echo "$(date +%T) Preventive hotword block applied for QTI SoundTrigger/ADSP stability" >> /data/oneos_hotword_preblock.log
+                    fi
+                fi
+                if [ "$defer_dex" = 1 ]; then
+                    timeout 5 /system/bin/sh /data/oneos_genv.sh /system/bin/cmd package bg-dexopt-job --cancel >/dev/null 2>&1 || true
+                    ( sleep 20; timeout 5 /system/bin/sh /data/oneos_genv.sh /system/bin/cmd package bg-dexopt-job --cancel >/dev/null 2>&1 || true ) &
+                fi
+                exit 0
+            fi
+            i=$((i + 1))
+            sleep 1
+        done
+    ' oneos-early-opt "${ONEOS_GUEST_PREVENT_HOTWORD:-1}" "${ONEOS_DEFER_BG_DEXOPT:-1}" "${ONEOS_FORCE_PREVENT_HOTWORD:-0}" </dev/null >/dev/null 2>&1 &
+fi
 echo "[Pivoted Root] Launching guest Zygote & SystemServer via zygote_exec..."
 if [ -f /data/oneos_root/enabled ]; then
     /system/bin/sh /data/oneos_runtime.sh pre || exit 3

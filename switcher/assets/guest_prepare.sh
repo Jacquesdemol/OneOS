@@ -1747,6 +1747,7 @@ if { [ -d /system_ext/apex ] && [ -d "$GUEST_SYSTEM_EXT" ]; } || [ $INJ = 1 ] ||
                 echo "Camera: staged OneOSTabS9FeCamCompat.jar in $GUEST_SYSTEM_EXT/framework (OneUiVersion 90500 shim)"
             fi
         fi
+        WANT_INJ=$INJ
         if [ $INJ = 1 ]; then
             mkdir -p "$OV/up/framework" && cp "$STAGE/oneos-telephony.jar" "$OV/up/framework/" &&
                 chmod 755 "$OV/up" "$OV/up/framework" && chmod 644 "$OV/up/framework/oneos-telephony.jar"
@@ -1765,10 +1766,10 @@ if { [ -d /system_ext/apex ] && [ -d "$GUEST_SYSTEM_EXT" ]; } || [ $INJ = 1 ] ||
                     fi
                 fi
             else
-                # The apex mount point matters more: today's rw form then.
+                # The apex mount point matters more: today's rw form then; farm fallback below can still bind oneos-telephony.jar.
                 INJ=0
                 rm -f "$OV/up/framework/oneos-telephony.jar"
-                echo "Signal poll: off (read-only overlay on $GUEST_SYSTEM_EXT refused)"
+                echo "Signal poll: read-only overlay on $GUEST_SYSTEM_EXT refused (trying fallbacks)"
             fi
         fi
         if [ $INJ = 0 ] && { [ ! -d "$GUEST_SYSTEM_EXT/apex" ] || [ $HWSM = 1 ] || [ $SEC_IMS = 1 ] || [ $SAMCAM = 1 ] || [ $TAB_CAM_COMPAT = 1 ]; }; then
@@ -1807,8 +1808,9 @@ if { [ -d /system_ext/apex ] && [ -d "$GUEST_SYSTEM_EXT" ]; } || [ $INJ = 1 ] ||
         # died on One UI's system_ext APEXes ("Unable to parse: /system_ext/apex/com.android.vndk.
         # v31.apex"). Without overlayfs: system_ext's top level copied on the stage's tmpfs
         # (folders, empty files, links), each entry bound from the image, plus the apex mount
-        # point. The overlay's other additions (bin/hwservicemanager, etc/permissions features,
-        # Samsung IMS and camera mount points) are not in it; those are off as on a refusal.
+        # point. Signal poll (oneos-telephony.jar), Tab S9 FE cam compat, and my_product features
+        # are added via farm_dir sub-farms; hwservicemanager / IMS / Samsung Camera mount points
+        # stay off without overlayfs.
         if [ ! -d "$GUEST_SYSTEM_EXT/apex" ] && [ -d /system_ext/apex ] && ! mount | grep -q " $GUEST_SYSTEM_EXT type overlay"; then
             FARM="$OV/farm"; FORIG="$OV/orig"; fok=1; fn=0
             rm -rf "$FARM" && mkdir -p "$FARM/apex" "$FORIG" || fok=0
@@ -1863,6 +1865,33 @@ if { [ -d /system_ext/apex ] && [ -d "$GUEST_SYSTEM_EXT" ]; } || [ $INJ = 1 ] ||
                     [ $utok = 1 ] && echo "OneOS app: user-type entry bound into system_ext/etc/sysconfig (no overlayfs)" ||
                         echo "!!! OneOS app: could not bind its user-type entry; One UI's package manager may leave it out"
                 fi
+                if [ -d "$GUEST_SYSTEM_EXT/framework" ] && { [ "$WANT_INJ" = 1 ] || [ "$TAB_CAM_COMPAT" = 1 ]; }; then
+                    SE_FW_NAMES=""
+                    [ "$WANT_INJ" = 1 ] && [ -f "$STAGE/oneos-telephony.jar" ] && SE_FW_NAMES="$SE_FW_NAMES oneos-telephony.jar"
+                    [ "$TAB_CAM_COMPAT" = 1 ] && [ -f "$OV/up/framework/OneOSTabS9FeCamCompat.jar" ] && SE_FW_NAMES="$SE_FW_NAMES OneOSTabS9FeCamCompat.jar"
+                    if [ -n "$SE_FW_NAMES" ] && farm_dir "$GUEST_SYSTEM_EXT/framework" "$STAGE/sysext_framework_farm" $SE_FW_NAMES; then
+                        if [ "$WANT_INJ" = 1 ] && [ -f "$STAGE/oneos-telephony.jar" ] &&
+                           cp "$STAGE/oneos-telephony.jar" "$STAGE/sysext_framework_farm/oneos-telephony.staged.jar" &&
+                           chmod 644 "$STAGE/sysext_framework_farm/oneos-telephony.staged.jar" &&
+                           { $BB chcon u:object_r:system_file:s0 "$STAGE/sysext_framework_farm/oneos-telephony.staged.jar" 2>/dev/null || true; }; then
+                            if $BB mount --bind "$STAGE/sysext_framework_farm/oneos-telephony.staged.jar" "$GUEST_SYSTEM_EXT/framework/oneos-telephony.jar"; then
+                                INJ=1
+                                echo "Signal poll: bound oneos-telephony.jar into system_ext/framework (no overlayfs)"
+                            fi
+                        fi
+                        if [ "$TAB_CAM_COMPAT" = 1 ] && [ -f "$OV/up/framework/OneOSTabS9FeCamCompat.jar" ]; then
+                            $BB mount --bind "$OV/up/framework/OneOSTabS9FeCamCompat.jar" "$GUEST_SYSTEM_EXT/framework/OneOSTabS9FeCamCompat.jar" &&
+                                echo "Camera: bound OneOSTabS9FeCamCompat.jar into system_ext/framework (no overlayfs)"
+                        fi
+                    fi
+                fi
+                MPF_FILE="$OV/up/etc/permissions/oneos-my-product-features.xml"
+                if [ -f "$MPF_FILE" ] && [ -d "$GUEST_SYSTEM_EXT/etc/permissions" ]; then
+                    if farm_dir "$GUEST_SYSTEM_EXT/etc/permissions" "$STAGE/sysext_permissions_farm" oneos-my-product-features.xml &&
+                       $BB mount --bind "$MPF_FILE" "$GUEST_SYSTEM_EXT/etc/permissions/oneos-my-product-features.xml"; then
+                        echo "Features from my_product: bound into system_ext/etc/permissions (no overlayfs)"
+                    fi
+                fi
             else
                 awk -v r="$GUEST_SYSTEM_EXT/" 'index($2, r) == 1 {print $2}' /proc/mounts | sort -r | while read -r m; do $BB umount -l "$m"; done
                 grep -q " $GUEST_SYSTEM_EXT tmpfs " /proc/mounts && $BB umount -l "$GUEST_SYSTEM_EXT"
@@ -1910,10 +1939,7 @@ if { [ -d /system_ext/apex ] && [ -d "$GUEST_SYSTEM_EXT" ]; } || [ $INJ = 1 ] ||
     fi
 fi
 if [ $INJ = 1 ]; then
-    if ! grep -q " $GUEST_SYSTEM_EXT overlay ro[, ]" /proc/mounts; then
-        INJ=0
-        echo "Signal poll: off (no read-only overlay on $GUEST_SYSTEM_EXT, which the injection needs)"
-    elif ! cmp -s "$GUEST_SYSTEM_EXT/framework/oneos-telephony.jar" "$STAGE/oneos-telephony.jar"; then
+    if ! cmp -s "$GUEST_SYSTEM_EXT/framework/oneos-telephony.jar" "$STAGE/oneos-telephony.jar"; then
         INJ=0
         echo "Signal poll: off ($GUEST_SYSTEM_EXT/framework/oneos-telephony.jar missing or not the staged one)"
     fi
@@ -2080,6 +2106,24 @@ else
     $BB chcon -R u:object_r:system_file:s0 "$DOV/up" 2>/dev/null || true
     if $BB mount -t overlay overlay -o "ro,lowerdir=$DOV/up:$PETC" "$PETC"; then
         echo "Display config: product/etc/displayconfig/display_port_ for ports ${DDC_PORTS:-none} (One UI's nits curve, brightnessMaximum${DDC_MAX:- none}$([ $DDC_PROX = 1 ] && echo ", Samsung's IR proximity"))"
+    elif [ -n "$DDC_PORTS" ] && [ -d "$PETC" ]; then
+        ddc_ok=0
+        if [ -d "$PETC/displayconfig" ]; then
+            DDC_NAMES=""; for f in "$DOV/up/displayconfig/"*.xml; do [ -f "$f" ] && DDC_NAMES="$DDC_NAMES ${f##*/}"; done
+            if [ -n "$DDC_NAMES" ] && farm_dir "$PETC/displayconfig" "$STAGE/product_displayconfig_farm" $DDC_NAMES; then
+                ddc_ok=1
+                for f in $DDC_NAMES; do
+                    $BB mount --bind "$DOV/up/displayconfig/$f" "$PETC/displayconfig/$f" || { ddc_ok=0; break; }
+                done
+            fi
+        elif farm_dir "$PETC" "$STAGE/product_etc_farm" displayconfig/ && [ -d "$PETC/displayconfig" ]; then
+            $BB mount --bind "$DOV/up/displayconfig" "$PETC/displayconfig" && ddc_ok=1
+        fi
+        if [ "$ddc_ok" = 1 ]; then
+            echo "Display config: product/etc/displayconfig/display_port_ for ports ${DDC_PORTS:-none} via bind-farm (no overlayfs; One UI's nits curve, brightnessMaximum${DDC_MAX:- none}$([ $DDC_PROX = 1 ] && echo ", Samsung's IR proximity"))"
+        else
+            echo "Display config: read-only overlay on product/etc refused and bind-farm failed, left out"
+        fi
     else
         echo "Display config: read-only overlay on product/etc refused, left out"
     fi
@@ -4908,7 +4952,8 @@ if [ "$GMS_WANT" = 1 ]; then
         echo "Guest setup: device_provisioned / user_setup_complete left to Pixel's setup wizard (Google services presented)"
     fi
 fi
-seed_settings "$GSET" settings_global $ADB_SEED auto_time=0 auto_time_zone=0 $PROV_GLOBAL launcher_support_card_no_padding=1
+# Prevent AdbDebuggingManager from entering a 200x/s Broken-pipe loop against host adbd on trusted Wi-Fi (adb_wifi_enabled=1).
+seed_settings "$GSET" settings_global $ADB_SEED adb_wifi_enabled=0 auto_time=0 auto_time_zone=0 $PROV_GLOBAL launcher_support_card_no_padding=1
 [ -z "$PROV_SECURE" ] || seed_settings "$STAGE/data/system/users/0/settings_secure.xml" settings_secure $PROV_SECURE
 
 echo "=== 5.1 $(date +%T) settings seeded ==="
@@ -7218,30 +7263,41 @@ APPLOOP
 chmod 755 "$STAGE/data/local/tmp/app_storage_loop.sh" 2>/dev/null || true
 
 echo "=== 6. $(date +%T) Setting up /system/xbin/su (KernelSU Bridge) ==="
-if ! mount | grep -q "$ROOTFS/system/xbin "; then
-    if [ -f "$STAGE/data/oneos_root/enabled" ]; then
-        $BB mount -t tmpfs tmpfs "$ROOTFS/system/xbin" || exit 3
-    else
-        $BB mount -t tmpfs tmpfs "$ROOTFS/system/xbin"
+# The guest's ksud copy (section 5d) when there is one: as su, its -M
+# (mount master) enters pid 1's namespace too, One UI's with the plain copy.
+if [ -f "$STAGE/data/oneos_root/enabled" ]; then
+    # The isolated broker is the guest's su. A host provider can expose su
+    # virtually through its kernel, leaving no regular host file to copy.
+    SU_SRC="$STAGE/guest_root"
+else
+    SU_SRC="$STAGE/data/oneos_ksu/ksud.guest"
+    [ -f "$SU_SRC" ] || SU_SRC="/data/adb/ksud"
+    [ -f "$SU_SRC" ] || SU_SRC=$(which su 2>/dev/null)
+    [ -f "$SU_SRC" ] || SU_SRC=$(find /data/adb /system/bin -name su 2>/dev/null | head -n 1)
+fi
+if [ -f "$SU_SRC" ]; then
+    mkdir -p "$STAGE/data/oneos_bin" &&
+        cp -f "$SU_SRC" "$STAGE/data/oneos_bin/su" &&
+        chmod 755 "$STAGE/data/oneos_bin/su" &&
+        $BB chcon u:object_r:system_file:s0 "$STAGE/data/oneos_bin/su" 2>/dev/null || true
+    echo "KernelSU bridge: /data/oneos_bin/su ready (from $SU_SRC)"
+fi
+if [ -d "$ROOTFS/system/xbin" ]; then
+    if ! mount | grep -q "$ROOTFS/system/xbin "; then
+        if [ -f "$STAGE/data/oneos_root/enabled" ]; then
+            $BB mount -t tmpfs tmpfs "$ROOTFS/system/xbin" || exit 3
+            cp "$SU_SRC" "$ROOTFS/system/xbin/su" && chmod 755 "$ROOTFS/system/xbin/su" || exit 3
+            [ -x "$ROOTFS/system/xbin/su" ] || exit 3
+        else
+            $BB mount -t tmpfs tmpfs "$ROOTFS/system/xbin" &&
+                [ -f "$SU_SRC" ] && cp "$SU_SRC" "$ROOTFS/system/xbin/su" && chmod 755 "$ROOTFS/system/xbin/su"
+        fi
     fi
-    # The guest's ksud copy (section 5d) when there is one: as su, its -M
-    # (mount master) enters pid 1's namespace too, One UI's with the plain copy.
-    if [ -f "$STAGE/data/oneos_root/enabled" ]; then
-        # The isolated broker is the guest's su. A host provider can expose su
-        # virtually through its kernel, leaving no regular host file to copy.
-        SU_SRC="$STAGE/guest_root"
-    else
-        SU_SRC="$STAGE/data/oneos_ksu/ksud.guest"
-        [ -f "$SU_SRC" ] || SU_SRC="/data/adb/ksud"
-        [ -f "$SU_SRC" ] || SU_SRC=$(which su 2>/dev/null)
-        [ -f "$SU_SRC" ] || SU_SRC=$(find /data/adb /system/bin -name su 2>/dev/null | head -n 1)
-    fi
-    if [ -f "$STAGE/data/oneos_root/enabled" ]; then
-        cp "$SU_SRC" "$ROOTFS/system/xbin/su" && chmod 755 "$ROOTFS/system/xbin/su" || exit 3
-        [ -x "$ROOTFS/system/xbin/su" ] || exit 3
-    else
-        [ -f "$SU_SRC" ] && cp "$SU_SRC" "$ROOTFS/system/xbin/su" && chmod 755 "$ROOTFS/system/xbin/su"
-    fi
+elif [ -f "$STAGE/data/oneos_root/enabled" ]; then
+    echo "ERROR: guest_root enabled but $ROOTFS/system/xbin missing"
+    exit 3
+else
+    echo "KernelSU bridge: $ROOTFS/system/xbin absent; using /data/oneos_bin/su via PATH"
 fi
 
 # Bring apps from inside the guest (0.5.07, owner: "bring apps inside the OneOS
@@ -7729,7 +7785,6 @@ rm -f "$STAGE/bpf_sockops.created"
 if [ "$A17_ON_A16" = 1 ]; then
     SOP=/sys/fs/bpf/netd_shared/prog_netd_sockops_prog
     LNU="$ROOTFS/apex/com.android.tethering/lib64/libnetd_updatable.so"
-    mkdir -p "$STAGE/diag_host" && ls -l /sys/fs/bpf/netd_shared > "$STAGE/diag_host/bpf_netd_shared.txt" 2>&1
     if [ -e "$SOP" ]; then
         echo "netd socket-ops program: One UI pinned its own; left alone"
     elif ! $BB grep -q prog_netd_sockops_prog "$LNU" 2>/dev/null; then
@@ -7762,6 +7817,9 @@ if [ "$A17_ON_A16" = 1 ]; then
     else
         echo "!!! L4S map: could not pin $L4S; the guest's NetworkStatsService may die on 'Cannot open l4s_accecn_ map'"
     fi
+fi
+if [ -d /sys/fs/bpf/netd_shared ]; then
+    mkdir -p "$STAGE/diag_host" && ls -lZ /sys/fs/bpf/netd_shared > "$STAGE/diag_host/bpf_netd_shared.txt" 2>&1
 fi
 # oneui8test13: Bluetooth stuck turning on (S22 Ultra test11 8ba80911: State BLE_TURNING_ON all session,
 # "Waited one second for vendor.samsung.hardware.security.vaultkeeper.ISehVaultKeeper/default" every second
@@ -7879,10 +7937,29 @@ f == 3 && FNR == 1 {
             hit = 0
             for (q in allowall) { split(q, b, SUBSEP); if (b[1] == s && b[2] == ns) hit = 1 }
             if (hit) continue
+            if (substr(lib, 1, 1) == ":") {
+                tns = substr(lib, 2)
+                if (index(links[s SUBSEP ns], "," tns ",") > 0) continue
+                if ((s SUBSEP tns) in exists) {
+                    add_ns[s SUBSEP ns SUBSEP tns] = 1
+                    addp[s SUBSEP ns] = addp[s SUBSEP ns] " " tns
+                    print "linker: [" s "] " ns " + :" tns " (namespace link)" > "/dev/stderr"
+                } else {
+                    print "linker: [" s "] " ns ": optional namespace :" tns " absent on host, skipped" > "/dev/stderr"
+                }
+                continue
+            }
             best = ""; bc = 0
             m = split(provs[s SUBSEP lib], ps, " ")
             for (j = 1; j <= m; j++) if (ps[j] != ns && cnt[s SUBSEP lib SUBSEP ps[j]] > bc) { best = ps[j]; bc = cnt[s SUBSEP lib SUBSEP ps[j]] }
-            if (best == "") { print "linker: [" s "] " ns ": no namespace provides " lib ", left out" > "/dev/stderr"; continue }
+            if (best == "") {
+                if (lib == "libcom_android_compos_ffi_c.so" && !((s SUBSEP "com_android_compos") in exists)) {
+                    print "linker: [" s "] " ns ": optional " lib " absent (no com_android_compos on host), skipped" > "/dev/stderr"
+                } else {
+                    print "linker: [" s "] " ns ": no namespace provides " lib ", left out" > "/dev/stderr"
+                }
+                continue
+            }
             addk = s SUBSEP ns SUBSEP best
             if (addk in add) v = add[addk] ":" lib; else v = lib
             add[addk] = v
@@ -7924,7 +8001,10 @@ pass == 2 {
             }
             print line
             for (i = 1; i <= n; i++) if (index(newp, " " ps[i] " ") && !((sec SUBSEP ns SUBSEP ps[i]) in done)) {
-                print "namespace." ns ".link." ps[i] ".shared_libs = " add[sec SUBSEP ns SUBSEP ps[i]]
+                if ((sec SUBSEP ns SUBSEP ps[i]) in add_ns)
+                    print "namespace." ns ".link." ps[i] ".allow_all_shared_libs = true"
+                else
+                    print "namespace." ns ".link." ps[i] ".shared_libs = " add[sec SUBSEP ns SUBSEP ps[i]]
                 done[sec SUBSEP ns SUBSEP ps[i]] = 1
             }
             next
@@ -8056,8 +8136,23 @@ bind_host_app() {
     echo "!!! no readable $3 from One UI either; binding $1 as it is"
     $BB mount --bind "$1" "$2" && echo "Host $(basename "$1") -> $2"
 }
-bind_host_app /system/priv-app/NetworkStackGoogle "$ROOTFS/system/priv-app/NetworkStack" com.google.android.networkstack
-bind_host_app /system/app/CaptivePortalLoginGoogle "$ROOTFS/system/app/CaptivePortalLogin" com.google.android.captiveportallogin
+bind_first_host_app() {
+    bha_pkg=$1 bha_srcs=$2 bha_dsts=$3 bha_src="" bha_dst=""
+    for s in $bha_srcs; do
+        [ -d "$s" ] && { bha_src=$s; break; }
+    done
+    for d in $bha_dsts; do
+        [ -d "$d" ] && { bha_dst=$d; break; }
+    done
+    [ -n "$bha_src" ] && [ -n "$bha_dst" ] || { echo "!!! cannot replace any of [$bha_dsts] with any of [$bha_srcs]"; return 0; }
+    bind_host_app "$bha_src" "$bha_dst" "$bha_pkg"
+}
+bind_first_host_app com.google.android.networkstack \
+    "/system/priv-app/NetworkStackGoogle /system/priv-app/NetworkStack" \
+    "$ROOTFS/system/priv-app/NetworkStackGoogle $ROOTFS/system/priv-app/NetworkStack"
+bind_first_host_app com.google.android.captiveportallogin \
+    "/system/app/CaptivePortalLoginGoogle /system/app/CaptivePortalLogin" \
+    "$ROOTFS/system/app/CaptivePortalLoginGoogle $ROOTFS/system/app/CaptivePortalLogin"
 if [ -d "$GUEST_SYSTEM_EXT/priv-app/CellBroadcastService" ]; then
     $BB mount -t tmpfs -o ro,size=4k,mode=755 tmpfs "$GUEST_SYSTEM_EXT/priv-app/CellBroadcastService" && \
         echo "Hid guest system_ext/priv-app/CellBroadcastService"
@@ -8525,20 +8620,25 @@ if grep -q '^ro.build.version.oneui=' "$ROOTFS/system/build.prop" 2>/dev/null &&
     SFF="$ROOTFS/system/etc/floating_feature.xml"
     PFF=/system/etc/floating_feature.xml
     grep -q '<SEC_FLOATING_FEATURE_CAMERA_' "$PFF" 2>/dev/null || PFF=/vendor/etc/floating_feature.xml
-    if [ "${ONEOS_ONEUI_FLOATING:-1}" = 1 ] && [ -f "$SFF" ] && grep -q '<SEC_FLOATING_FEATURE_CAMERA_' "$PFF" 2>/dev/null; then
+    if [ "${ONEOS_ONEUI_FLOATING:-1}" = 1 ] && [ -f "$SFF" ] &&
+       { grep -q '<SEC_FLOATING_FEATURE_CAMERA_' "$PFF" 2>/dev/null || grep -q '<SEC_FLOATING_FEATURE_BIOAUTH_' "$PFF" 2>/dev/null; }; then
         if awk -v pf="$PFF" -v addf="$FF_ADD" '
-            BEGIN { while ((getline l < pf) > 0) if (match(l, /<SEC_FLOATING_FEATURE_CAMERA_[A-Z0-9_]+>/)) {
-                        k = substr(l, RSTART + 1, RLENGTH - 2); if (!(k in cam)) order[++n] = k; cam[k] = l }
-                    while ((getline l < addf) > 0) if (l ~ /^SEC_FLOATING_FEATURE_CAMERA_[A-Z0-9_]+=/) keep[substr(l, 1, index(l, "=") - 1)] = 1 }
-            { line = $0
-              if (match(line, /<SEC_FLOATING_FEATURE_CAMERA_[A-Z0-9_]+>/)) { k = substr(line, RSTART + 1, RLENGTH - 2)
-                  if (!(k in keep)) { if (k in cam) { print cam[k]; done[k] = 1 }; next } }
+            function host_key(s,    k) {
+                if (match(s, /<SEC_FLOATING_FEATURE_CAMERA_[A-Z0-9_]+>/) || match(s, /<SEC_FLOATING_FEATURE_BIOAUTH_[A-Z0-9_]+>/)) {
+                    return substr(s, RSTART + 1, RLENGTH - 2)
+                }
+                return ""
+            }
+            BEGIN { while ((getline l < pf) > 0) { k = host_key(l); if (k != "") { if (!(k in cam)) order[++n] = k; cam[k] = l } }
+                    while ((getline l < addf) > 0) if (l ~ /^SEC_FLOATING_FEATURE_(CAMERA|BIOAUTH)_[A-Z0-9_]+=/) keep[substr(l, 1, index(l, "=") - 1)] = 1 }
+            { line = $0; k = host_key(line)
+              if (k != "") { if (!(k in keep)) { if (k in cam) { print cam[k]; done[k] = 1 }; next } }
               if (line ~ /<\/SecFloatingFeatureSet>/) for (i = 1; i <= n; i++) if (!(order[i] in done) && !(order[i] in keep)) print cam[order[i]]
               print line }' "$SFF" > "$STAGE/data/oneos_system_floating_feature.xml.tmp" &&
            grep -q '</SecFloatingFeatureSet>' "$STAGE/data/oneos_system_floating_feature.xml.tmp"; then
             mv -f "$STAGE/data/oneos_system_floating_feature.xml.tmp" "$STAGE/data/oneos_system_floating_feature.xml"
             chown 0:0 "$STAGE/data/oneos_system_floating_feature.xml"; chmod 644 "$STAGE/data/oneos_system_floating_feature.xml"
-            echo "Floating features: the image's /system/etc list with the phone's $(grep -c '<SEC_FLOATING_FEATURE_CAMERA_' "$PFF") camera lines ($PFF)"
+            echo "Floating features: the image's /system/etc list with the phone's $(grep -c -E '<SEC_FLOATING_FEATURE_(CAMERA|BIOAUTH)_' "$PFF") camera/biometric lines ($PFF)"
         else
             rm -f "$STAGE/data/oneos_system_floating_feature.xml.tmp"
             echo "!!! Floating features: the image's /system/etc list not rewritten"
@@ -9249,6 +9349,9 @@ if [ -f "$STAGE/PermissionController_patched.apk" ]; then
         $BB umount -l "$PERM_APK" 2>/dev/null || true
         $BB mount --bind "$STAGE/PermissionController_patched.apk" "$PERM_APK" 2>/dev/null && echo "Bound PermissionController_patched.apk (late) -> $PERM_APK"
     done
+elif $BB grep -q ' com.android.permission ' "$STAGE/payload_loops" 2>/dev/null ||
+     grep -q '^ro.build.version.oneui=' "$ROOTFS/system/build.prop" 2>/dev/null; then
+    echo "PermissionController: guest permission payload or One UI platform present; PermissionController_patched.apk not needed"
 else
     echo "!!! WARNING: PermissionController_patched.apk missing from $STAGE"
     echo "!!! Samsung's PermissionController will crash every runtime-permission dialog"

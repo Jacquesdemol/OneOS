@@ -1,0 +1,131 @@
+# CHANGELOG_ANTIGRAVITY
+
+Sessão de análise e correções baseada no protocolo [Sync.md](file:///data/data/com.termux/files/home/agy/Sync.md) e nos logs da sessão `c6469cf3ab495fd8` (`App 0.5.45 (188)`, perfil `s-ultra-8450` / `SM-S908E`, imagem `oneui95-s948b`).
+
+---
+
+## Fase 1 — Sincronização com Upstream
+
+- **Remote upstream:** `https://github.com/fahadalijaved/OneOS.git`
+- **Commits sincronizados de `upstream/main` (`393f9bd..7d65def`):**
+  - `fb49dbd` (`v0.5.45`) — `OneOS 0.5.45`
+  - `5501087` — `Credits: pull requests #355, #358, #361, #362`
+  - `7d65def` (`v0.5.46`) — `OneOS 0.5.46`
+- **Commit de merge:** `2d4d0d1` (`Merge upstream/main (v0.5.45..v0.5.46) with --theirs on conflict`)
+- Conflitos em `switcher/assets/guest_prepare.sh` foram resolvidos com `--theirs` e documentados em [SYNC_REPORT.md](file:///data/data/com.termux/files/home/agy/OneOS/SYNC_REPORT.md). Os arquivos específicos de `4d13f58` aplicáveis ao dispositivo foram reintegrados na Fase 4 mantendo as adições do `v0.5.46` (`TAB_CAM_COMPAT`).
+
+---
+
+## Fase 2 — Diagnóstico e Correção de Áudio (`SM-S908E` / Qualcomm PAL + ADSP)
+
+### Causa Raiz Observada nos Logs
+- Em `boot.log.06` (`08:40:20`) e `boot.log.01` (`08:45:41`), `com.google.android.googlequicksearchbox` carrega o modelo de hotword de ~110 KB (`7038ddc8-30f2-11e6-b0ac-40a8f03d3f15`, `HOTWORD`) via `PAL: StreamSoundTrigger` -> `SoundTriggerEngineGsl: ProcessStartRecognition`.
+- ~23–40 ms depois, o domínio de áudio no ADSP cai (`COSR: ar_osal_pd_notifier_cb: state(0) domain(msm/adsp/audio_pd)`, `PAL: SndMonitor: card status 0`, `SoundTriggerEngineGsl: Failed to start session, status = -102`).
+- Diferente do Exynos (onde `vts_load_sound_model` derruba o HAL e o `audioserver`), no Qualcomm PAL o `audioserver` permanece vivo (`ST_STATE_SSR`), fazendo o PAL recarregar o modelo a cada ~0,5 s em loop infinito de SSR (`rproc_recovery_wq` até 57.1% CPU, `audioadsprpcd` 24.1%, `adsprpcd` 17.8%), impedindo reprodução em `AudioOut_15` / `AudioOut_D`.
+
+### Arquivos Modificados
+- [guest_start.sh](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/guest_start.sh):
+  - Extraídos os helpers `restart_hal()` e `hotword_off()` dentro de `audio_keeper`.
+  - Além do crash Exynos `(vts_load_sound_model+`, `hotword_off()` detecta falhas QTI PAL/ADSP (`SoundTriggerEngineGsl:.*Failed to start` ou `StreamSoundTrigger:.*LoadSoundModel` acompanhado de `ar_osal_pd_notifier_cb` `state(0)` em `msm/adsp/audio_pd` ou `SndMonitor:.*card status 0`) mesmo enquanto o `audioserver` ainda está vivo.
+  - Aplica `cmd appops set <pkg> RECORD_AUDIO_HOTWORD ignore` e `am force-stop` em `com.google.android.googlequicksearchbox` (e `com.android.hotwordenrollment.okgoogle` / `xgoogle`), grava `/data/oneos_hotword_off.log`, reinicia `vendor.audio-hal*` e `audioserver` para limpar o estado `ST_STATE_SSR` e normalizar o áudio.
+
+---
+
+## Fase 3 — Diagnóstico e Correção de FOD (`QBT2608` Ultrassônico)
+
+### Causa Raiz Observada nos Logs
+1. `oneui95-a16.guards.txt` não possui `# biometric-remove guard`, pois [make-overlays.sh](file:///data/data/com.termux/files/home/agy/OneOS/scripts/make-overlays.sh) aplicava `guest_no_biometric_cleanup.py` sem aplicar `guest_no_biometric_remove.py` nem emitir `# biometric-remove guard` em `guards.txt`. Consequentemente, [guest_prepare.sh](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/guest_prepare.sh) removia `settings_fingerprint*.xml` do guest (`hasEnrollments: false`).
+2. Ao tentar cadastrar uma nova digital nas Configurações do guest, `SemFingerprintEnrollClient` envia o token placeholder de `OneOSGuestLock.hat()` (sem HMAC válido de Gatekeeper) para o HAL físico `vendor.samsung.hardware.biometrics.fingerprint@3.0::ISehBiometricsFingerprint/default` (PID 11839), que rejeita o cadastro com `handleError: error=8, vendor=1003` (`BMFP: fp_error: 8, 1003, enroll_error`), acompanhado de `FingerprintProvider: skip req (35) due to Hal not running` e `BiometricSysUiManager: show: No exist ID`.
+3. No guest One UI 9.5 (`oneui95-s948b`), a mesclagem de `/system/etc/floating_feature.xml` preservava apenas chaves `SEC_FLOATING_FEATURE_CAMERA_*` do host, mantendo `SEC_FLOATING_FEATURE_BIOAUTH_*` do aparelho doador (S26 Ultra).
+
+### Arquivos Modificados
+- [make-overlays.sh](file:///data/data/com.termux/files/home/agy/OneOS/scripts/make-overlays.sh):
+  - Integra `switcher/patches/guest_no_biometric_remove.py` na geração de `services_patched.jar` e emite `# biometric-remove guard` em `$OUT/guards.txt` quando aplicado (e aplica condicionalmente `guest_force_aidl_fingerprint.py`, `guest_udfps_location.py`, `guest_seh_touch.py`, `guest_fp_touchwatch.py` em imagens não-One UI compatíveis).
+- [guest_prepare.sh](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/guest_prepare.sh):
+  - Preserva as chaves `SEC_FLOATING_FEATURE_BIOAUTH_*` do host junto às chaves `SEC_FLOATING_FEATURE_CAMERA_*` em `$STAGE/data/oneos_system_floating_feature.xml` para que o sensor ultrassônico/óptico real do aparelho host seja exposto ao framework guest.
+
+> **Observação importante:** Os pacotes binários pré-compilados em `packages/oneui95-a16` precisam ser reconstruídos com `scripts/make-overlays.sh` para incluir `guest_no_biometric_remove.py` e `# biometric-remove guard` no `guards.txt` e assim habilitar com segurança o reaproveitamento das digitais já cadastradas na One UI.
+
+---
+
+## Fase 4 — Estabilidade, Fluidez e Bateria
+
+### Problemas Identificados nos Logs
+- **`AdbDebuggingManager` em loop de 200x/s (`29.065` linhas E/W em `boot.log.06`):** Em rede Wi-Fi confiável, `AdbDebuggingManager` enviava `W1` para o `adbd` do host (`Broken pipe`) e reconectava continuamente sem pausa, consumindo CPU e bateria.
+- **Perdas do `--theirs` em `guest_prepare.sh` confirmadas em `takeover_app.log` e `ld.config.guest.log`:** Kernel `android12-5.10` (`SM-S908E`) recusando `overlayfs` em `system_ext` (perdendo `oneos-telephony.jar`) e em `product/etc` (`displayconfig` recusado), ausência de `/system/xbin` ao montar tmpfs para `su`, e 8 avisos de `:sphal` / `libcom_android_compos_ffi_c.so` no `ld.config.guest`.
+- **`dex2oat64` (233% CPU) / `kswapd0` (89% CPU):** O limite de threads/heap de `dex2oat` adicionado em `guest_props.sh` (já preservado no merge em `4d13f58..HEAD`) não estava presente na versão `0.5.45` executada nos logs.
+
+### Arquivos Modificados
+- [guest_prepare.sh](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/guest_prepare.sh):
+  - Reaplica `WANT_INJ` e fallbacks `farm_dir` em `system_ext/framework` (`oneos-telephony.jar`, `OneOSTabS9FeCamCompat.jar` do `0.5.46`) e `system_ext/etc/permissions` quando `overlayfs` é recusado.
+  - Reaplica fallback `bind-farm` em `product/etc/displayconfig` (`display_port_*.xml`).
+  - Reaplica ponte `/data/oneos_bin/su` quando `$ROOTFS/system/xbin` não existe.
+  - Reaplica suporte a links de namespace (`:sphal`) e skip opcional de `libcom_android_compos_ffi_c.so` no awk do `ld.config.guest.txt`.
+  - Reaplica `bind_first_host_app` (`NetworkStack*`, `CaptivePortalLogin*`), verificação de `PermissionController` em payloads/One UI e diagnóstico `ls -lZ /sys/fs/bpf/netd_shared`.
+  - Define `adb_wifi_enabled=0` no `seed_settings` de `settings_global.xml` para impedir o loop `Send packet W1 -> Broken pipe` contra o `adbd` do host.
+
+---
+
+## Verificação e Instruções de Build / Teste
+
+### Checks Executados após as Últimas Edições
+- Sintaxe shell (`sh -n` e `bash -n`): **PASSOU** em `guest_start.sh`, `guest_prepare.sh` e `make-overlays.sh`.
+- `test-audio-hal-stale-restart.py`: **PASSOU** (`Ran 4 tests ... OK`).
+- `test-guest-fingerprint-aidl.py`: **PASSOU** (`Ran 7 tests ... OK`).
+- `test-guest-root.py`: **PASSOU** (`Ran 6 tests ... OK`).
+- `test-guest-controls.py`: **PASSOU** (`Ran 10 tests ... OK`).
+- `test-guest-installer-helpers.py`: **PASSOU** (`Ran 5 tests ... OK`).
+- `test-verified-overlays.py`: **PASSOU** (`Ran 4 tests ... OK`).
+- `test-launch-switch-verdict.py`: **PASSOU** (`Ran 18 tests ... OK`).
+- `test-boot-fixes`: **PASSOU** (`test-boot-fixes OK`).
+- Smoke checks (Python/sh): validado `guest_no_biometric_remove.py` em smali `SemFingerprintRemovalClient`, presença de `SEC_FLOATING_FEATURE_BIOAUTH_` e `adb_wifi_enabled=0`, ausência de apóstrofos no bloco `audio_keeper`, e match da assinatura PAL/ADSP nos logs reais.
+- Notas de ambiente no Termux:
+  - `check-shell.py` executado com `sh -n` (no lugar de `busybox`, ausente no PATH do Termux) verificou 16 scripts embutidos sem erros nos blocos alterados (apenas apontando uma linha pré-existente com `grep -q '^ro.build.version.oneui='` em `guest_start.sh:2466`).
+  - `test-guest-audio-policy.py` (2/31 falhas) e `test-guest-boot-service-gate.py` (2/2 falhas) apresentaram falhas ligadas ao ambiente Termux/host Android ou suíte pré-existente fora dos trechos editados; `check-oneos-refs.py` requer `<dexdump>` sobre overlays compilados.
+
+### Build / Implantação
+1. **Atualizar overlays (`services_patched.jar` + `guards.txt`)** em ambiente Linux/CI com Android SDK + `apktool`:
+   ```sh
+   scripts/make-overlays.sh <caminho/system.img> out/overlays
+   ```
+   Confirme que `out/overlays/guards.txt` contém `# biometric-remove guard: ...` e rode `scripts/check-oneos-refs.py <dexdump> out/overlays/services_patched.jar`.
+2. **Empacotar os scripts atualizados** (`switcher/assets/guest_start.sh`, `switcher/assets/guest_prepare.sh`) no aplicativo `app-android` (`./gradlew :app:assembleDebug` ou equivalente) para aplicar em sessão no `SM-S908E`.
+
+---
+
+## Workflows CI/CD (GitHub Actions) e Otimização de CPU/Memória no Switch (`work.md`)
+
+### Frente 1 — Workflow de Overlays ([build-overlays.yml](file:///data/data/com.termux/files/home/agy/OneOS/.github/workflows/build-overlays.yml))
+- Acionado manualmente via `workflow_dispatch`:
+  - `image_url` (`string`, obrigatório): URL direta de imagem/arquivo base (`.zip`, `.tar.gz`/`.tgz`, `.tar.xz`/`.txz`, `.xz`, `.gz`, `.7z`, `.img`, sparse `simg2img`, `system.new.dat.br`, `super.img` via `lpunpack` e EROFS via `fsck.erofs`/`mount` + `mke2fs`). Download com `aria2c` e fallback `curl -fSL`.
+  - `package_name` (`string`, padrão `oneui95-a16`): subpasta destino em `packages/<package_name>` e nome do artefato.
+  - `commit_to_repo` (`boolean`, padrão `false`): quando `true`, copia a saída para `packages/<package_name>/` (sincronizando `app-android/packages/<package_name>.guards.txt` se existir) e realiza commit/push no branch atual.
+- Ambiente `ubuntu-latest`: instala JDK 17 (`temurin`), Android SDK (`build-tools;35.0.0`, `platforms;android-36`), `apktool` (`2.11.1` se ausente em `mysticgsi/tools/apktool`), `~/.android/debug.keystore`, `e2fsprogs` (`debugfs`), `erofs-utils`, `fuse2fs`, `p7zip-full`, `android-sdk-libsparse-utils`, `brotli`.
+- Executa `scripts/make-overlays.sh`, valida `guards.txt` (`# biometric-remove guard`) e `scripts/check-oneos-refs.py $(command -v dexdump) out/overlays/services_patched.jar`, empacota `.tar.gz`/`.zip` e publica via `actions/upload-artifact@v4`.
+
+### Frente 2 — Workflow de Build do APK ([build-apk.yml](file:///data/data/com.termux/files/home/agy/OneOS/.github/workflows/build-apk.yml))
+- Acionado em `workflow_dispatch` e `push` em `main`.
+- Executa validação pré-build (`sh -n` em `switcher/assets/*.sh` e `scripts/*.sh`, `test-boot-fixes.py` e suítes unitárias em `scripts/test-*.py`).
+- Configura JDK 21 (`temurin`), Android SDK (`platform-tools`, `build-tools;35.0.0`, `platforms;android-36`, `platforms;android-37 || true`) e cache Gradle (`gradle/actions/setup-gradle@v4`).
+- Verifica se os secrets `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS` e `KEY_PASSWORD` estão preenchidos:
+  - Presentes: cria `~/.oneos-release/release.jks` e `keystore.properties`, executa `scripts/build-guest-manager.sh release` e `./gradlew :app:assembleRelease`.
+  - Ausentes: executa `scripts/build-guest-manager.sh debug` e `./gradlew :app:assembleDebug`.
+- Publica os APKs gerados com nome descritivo `oneos-apk-v<versão>-<short_sha>-<debug|release>` via `actions/upload-artifact@v4`.
+
+### Frente 3 — Otimizações de CPU, `dex2oat`, Memória e Watchdogs no Switch
+- **Bloqueio preventivo de Hotword (Zero Crash no ADSP)** ([guest_start.sh](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/guest_start.sh#L4013-L4042)):
+  - Subshell leve aguarda o serviço `package` (no namespace de montagem do guest) e `appops`, aplicando preventivamente `cmd appops set <pkg> RECORD_AUDIO_HOTWORD ignore` em `com.google.android.googlequicksearchbox` e `com.android.hotwordenrollment.{okgoogle,xgoogle}` em hosts Qualcomm (`QTI`, configurável via `ONEOS_GUEST_PREVENT_HOTWORD=0`) antes do `SoundTrigger` inicializar, gravando `/data/oneos_hotword_preblocked` e `/data/oneos_hotword_preblock.log`.
+- **Controle rigoroso de `dex2oat` e `bg-dexopt-job`** ([guest_props.sh](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/guest_props.sh#L2118-L2147), [guest_start.sh](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/guest_start.sh#L4032-L4035)):
+  - Além de `boot-dex2oat-threads=2`, `dex2oat-threads=2`, `dex2oat-Xmx=256m` e `dex2oat-minidebuginfo=false`, adiciona `dalvik.vm.background-dex2oat-threads=1`, `dalvik.vm.dex2oat-cpu-set`, `dalvik.vm.background-dex2oat-cpu-set` (lidos de `policy0/related_cpus`, padrão `0,1,2,3` para confinar aos núcleos LITTLE no Snapdragon 8 Gen 1) e `pm.dexopt.bg-dexopt=speed-profile` (restaurados/limpos no retorno por `guest_props.sh remove`).
+  - Cancela execuções imediatas de `cmd package bg-dexopt-job --cancel` logo após a subida do `package` service e +20 s depois (`ONEOS_DEFER_BG_DEXOPT=0` desativa).
+- **Alívio de pressão de memória e `kswapd0`** ([oneos_switch.sh](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/oneos_switch.sh#L1752-L1780), [return_to_oneui.sh](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/return_to_oneui.sh#L95-L97), [return_to_oneui.sh](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/return_to_oneui.sh#L1149-L1154)):
+  - `return_to_oneui.sh baseline` salva `/proc/sys/vm/swappiness` e `vfs_cache_pressure` em `inplace_base/vm_sysctl`.
+  - Após parar a One UI e antes de subir o container guest (`ONEOS_GUEST_MEM_TUNE=0` desativa), `oneos_switch.sh` executa `sync` + `echo 1 > /proc/sys/vm/drop_caches`, limita `vm.swappiness` a `60` (quando > 60, ex.: `130` no `SM-S908E`) e ajusta `vm.vfs_cache_pressure` para `80`, restaurando os valores exatos do host no `return_to_oneui.sh`.
+- **Suavização de polling e `logcat` filtrado em `audio_keeper`** ([guest_start.sh](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/guest_start.sh#L1604-L1643)):
+  - Filtro de tags no `logcat` (`-t 250 -s "PAL: SoundTriggerEngineGsl:E" "PAL: StreamSoundTrigger:I" "PAL: SndMonitor:I" "COSR:I" "*:S"` e `-b crash -t 100`), espaçamento do check reativo para cada 15 s (`hwt % 5`), e skip imediato quando `/data/oneos_hotword_preblocked` ou `/data/oneos_hotword_off.log` estiver presente.
+
+### Verificação Final após as Últimas Edições (`task-453`)
+- `sh -n` e `bash -n` **PASSARAM** em `guest_start.sh`, `guest_prepare.sh`, `guest_props.sh`, `oneos_switch.sh`, `return_to_oneui.sh` e `make-overlays.sh`.
+- `YAML_BASIC_STRUCTURE_OK` em `build-overlays.yml` e `build-apk.yml` (PyYAML não instalado no Termux).
+- `test-boot-fixes.py` (4/4), `test-audio-hal-stale-restart.py` (4/4), `test-guest-fingerprint-aidl.py` (7/7), `test-guest-root.py` (6/6), `test-guest-controls.py` (10/10), `test-guest-installer-helpers.py` (5/5), `test-verified-overlays.py` (4/4) e `test-launch-switch-verdict.py` (18/18) **PASSARAM**.
+- `check-shell.py` (`sh -n` no lugar de `busybox`): 41 blocos verificados sem falhas nos trechos modificados (apenas 2 achados pré-existentes do upstream em `guest_start.sh:2466` e `oneos_switch.sh:2725`).

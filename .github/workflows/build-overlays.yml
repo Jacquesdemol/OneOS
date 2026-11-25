@@ -1,0 +1,254 @@
+name: Build Overlays
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_url:
+        description: "Direct URL to download base system image or archive (.zip, .tar.gz, .xz, .img.xz, .img)"
+        required: true
+        type: string
+      package_name:
+        description: "Target package directory under packages/ and artifact label"
+        required: false
+        default: "oneui95-a16"
+        type: string
+      commit_to_repo:
+        description: "Commit and push generated overlays into packages/<package_name> on the current branch"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build-overlays:
+    runs-on: ubuntu-latest
+    env:
+      APKTOOL_VERSION: "2.11.1"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android build-tools and platform
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "build-tools;35.0.0" "platforms;android-36"
+          BT_DIR="$(ls -d "$ANDROID_HOME/build-tools"/* | sort -V | tail -n 1)"
+          echo "$BT_DIR" >> "$GITHUB_PATH"
+
+      - name: Install host extraction and image tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            aria2 \
+            brotli \
+            curl \
+            e2fsprogs \
+            erofs-utils \
+            file \
+            fuse2fs \
+            p7zip-full \
+            python3 \
+            unzip \
+            xz-utils \
+            zip
+          sudo apt-get install -y android-sdk-libsparse-utils || sudo apt-get install -y img2simg || true
+
+      - name: Ensure Apktool and debug keystore
+        run: |
+          set -euo pipefail
+          BUNDLED_APKTOOL="$(ls mysticgsi/tools/apktool/*.jar 2>/dev/null | head -n 1 || true)"
+          if [ -z "$BUNDLED_APKTOOL" ]; then
+            mkdir -p .ci-tools
+            curl -fsSL -o ".ci-tools/apktool_${APKTOOL_VERSION}.jar" \
+              "https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar"
+            echo "APKTOOL=$GITHUB_WORKSPACE/.ci-tools/apktool_${APKTOOL_VERSION}.jar" >> "$GITHUB_ENV"
+          else
+            echo "APKTOOL=$GITHUB_WORKSPACE/$BUNDLED_APKTOOL" >> "$GITHUB_ENV"
+          fi
+          mkdir -p "$HOME/.android"
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            keytool -genkeypair -v \
+              -keystore "$HOME/.android/debug.keystore" \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+      - name: Download and locate raw system.img
+        env:
+          IMAGE_URL: ${{ inputs.image_url }}
+        run: |
+          set -euo pipefail
+          DL_DIR="$RUNNER_TEMP/dl"
+          EX_DIR="$RUNNER_TEMP/extracted"
+          mkdir -p "$DL_DIR" "$EX_DIR"
+
+          URL_PATH="${IMAGE_URL%%\?*}"
+          FNAME="$(basename "$URL_PATH")"
+          [ -n "$FNAME" ] && [ "$FNAME" != "/" ] || FNAME="base_image.bin"
+          DL_FILE="$DL_DIR/$FNAME"
+
+          echo "Downloading $IMAGE_URL..."
+          if command -v aria2c >/dev/null 2>&1; then
+            aria2c -x 8 -s 8 -k 1M --max-tries=5 --allow-overwrite=true \
+              --dir="$DL_DIR" --out="$FNAME" "$IMAGE_URL" || curl -fSL --retry 3 -o "$DL_FILE" "$IMAGE_URL"
+          else
+            curl -fSL --retry 3 -o "$DL_FILE" "$IMAGE_URL"
+          fi
+
+          # Extract archives (.zip, .tar.gz, .tgz, .tar.xz, .xz, .7z, .gz)
+          MAGIC="$(file -b "$DL_FILE" || true)"
+          echo "Downloaded file type: $MAGIC"
+          case "$DL_FILE:$MAGIC" in
+            *.tar.gz:*|*.tgz:*|*:*"gzip compressed"*tar*)
+              tar -xzf "$DL_FILE" -C "$EX_DIR" ;;
+            *.tar.xz:*|*.txz:*|*:*"XZ compressed"*tar*)
+              tar -xJf "$DL_FILE" -C "$EX_DIR" ;;
+            *.img.xz:*|*.xz:*|*:*"XZ compressed"*)
+              OUT_XZ="$EX_DIR/${FNAME%.xz}"
+              [ "$OUT_XZ" = "$EX_DIR/$FNAME" ] && OUT_XZ="$EX_DIR/system.img"
+              xz -dc "$DL_FILE" > "$OUT_XZ" ;;
+            *.img.gz:*|*.gz:*|*:*"gzip compressed"*)
+              OUT_GZ="$EX_DIR/${FNAME%.gz}"
+              [ "$OUT_GZ" = "$EX_DIR/$FNAME" ] && OUT_GZ="$EX_DIR/system.img"
+              gzip -dc "$DL_FILE" > "$OUT_GZ" ;;
+            *.zip:*|*:*"Zip archive"*)
+              unzip -q "$DL_FILE" -d "$EX_DIR" || 7z x -y "-o$EX_DIR" "$DL_FILE" ;;
+            *.7z:*|*:*"7-zip archive"*)
+              7z x -y "-o$EX_DIR" "$DL_FILE" ;;
+            *)
+              mv "$DL_FILE" "$EX_DIR/system.img" ;;
+          esac
+
+          # Handle Brotli sparse Android images if present (system.new.dat.br + system.transfer.list)
+          BR_DAT="$(find "$EX_DIR" -maxdepth 4 -type f -name 'system.new.dat.br' | head -n 1 || true)"
+          if [ -n "$BR_DAT" ]; then
+            BR_DIR="$(dirname "$BR_DAT")"
+            brotli -d -f "$BR_DAT" -o "$BR_DIR/system.new.dat"
+            if [ -f "$BR_DIR/system.transfer.list" ] && ! find "$EX_DIR" -type f -name 'system.img' | grep -q .; then
+              curl -fsSL -o "$RUNNER_TEMP/sdat2img.py" \
+                "https://raw.githubusercontent.com/xpirt/sdat2img/master/sdat2img.py"
+              python3 "$RUNNER_TEMP/sdat2img.py" "$BR_DIR/system.transfer.list" "$BR_DIR/system.new.dat" "$EX_DIR/system.img"
+            fi
+          fi
+
+          # Locate system.img (or largest .img / super.img fallback)
+          SYS_IMG="$(find "$EX_DIR" -maxdepth 4 -type f \( -iname 'system.img' -o -iname '*system*.img' -o -iname '*.raw' \) -printf '%s %p\n' | sort -nr | head -n 1 | cut -d' ' -f2- || true)"
+          if [ -z "$SYS_IMG" ]; then
+            SYS_IMG="$(find "$EX_DIR" -maxdepth 4 -type f -iname '*.img' -printf '%s %p\n' | sort -nr | head -n 1 | cut -d' ' -f2- || true)"
+          fi
+          [ -n "$SYS_IMG" ] && [ -f "$SYS_IMG" ] || { echo "ERROR: Could not locate system.img in downloaded archive"; ls -la "$EX_DIR"; exit 1; }
+          echo "Candidate image: $SYS_IMG ($(file -b "$SYS_IMG"))"
+
+          # Convert Android sparse image to raw if needed
+          if file -b "$SYS_IMG" | grep -qi "Android sparse image"; then
+            RAW_IMG="$RUNNER_TEMP/system.raw.img"
+            simg2img "$SYS_IMG" "$RAW_IMG"
+            SYS_IMG="$RAW_IMG"
+          fi
+
+          # Handle super.img if needed via 7z/lpunpack or fail clearly
+          if [ "$(basename "$SYS_IMG")" = "super.img" ] && file -b "$SYS_IMG" | grep -qiE "data|super"; then
+            if command -v lpunpack >/dev/null 2>&1; then
+              mkdir -p "$EX_DIR/super"
+              lpunpack "$SYS_IMG" "$EX_DIR/super"
+              SYS_IMG="$(find "$EX_DIR/super" -type f -iname 'system*.img' -printf '%s %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-)"
+            fi
+          fi
+
+          # make-overlays.sh inspects the image with debugfs (ext2/ext4); repack EROFS into ext4 if needed
+          if ! /usr/sbin/debugfs -R "stat /system/build.prop" "$SYS_IMG" >/dev/null 2>&1; then
+            if file -b "$SYS_IMG" | grep -qi "EROFS"; then
+              echo "Converting EROFS image to raw ext4 for debugfs-based overlay generation..."
+              MNT="$RUNNER_TEMP/erofs_mnt"
+              mkdir -p "$MNT" "$RUNNER_TEMP/erofs_root"
+              if command -v fsck.erofs >/dev/null 2>&1; then
+                fsck.erofs --extract="$RUNNER_TEMP/erofs_root" "$SYS_IMG"
+              else
+                sudo mount -t erofs -o loop,ro "$SYS_IMG" "$MNT"
+                sudo cp -a "$MNT/." "$RUNNER_TEMP/erofs_root/"
+                sudo umount "$MNT"
+              fi
+              EXT4_IMG="$RUNNER_TEMP/system_ext4.img"
+              SIZE_MB=$(( $(du -sm "$RUNNER_TEMP/erofs_root" | awk '{print $1}') + 512 ))
+              truncate -s "${SIZE_MB}M" "$EXT4_IMG"
+              /usr/sbin/mke2fs -t ext4 -d "$RUNNER_TEMP/erofs_root" "$EXT4_IMG"
+              SYS_IMG="$EXT4_IMG"
+            fi
+          fi
+
+          echo "SYSTEM_IMG=$SYS_IMG" >> "$GITHUB_ENV"
+
+      - name: Generate overlays via scripts/make-overlays.sh
+        run: |
+          set -euo pipefail
+          mkdir -p out/overlays
+          bash scripts/make-overlays.sh "$SYSTEM_IMG" out/overlays
+
+      - name: Validate guards and dex references
+        run: |
+          set -euo pipefail
+          test -f out/overlays/guards.txt
+          grep -q '^# biometric-remove guard' out/overlays/guards.txt
+          DEXDUMP="$(command -v dexdump || find "$ANDROID_HOME/build-tools" -type f -name dexdump | sort -V | tail -n 1)"
+          test -x "$DEXDUMP"
+          python3 scripts/check-oneos-refs.py "$DEXDUMP" out/overlays/services_patched.jar
+
+      - name: Package overlays archive
+        env:
+          PKG_NAME: ${{ inputs.package_name }}
+        run: |
+          set -euo pipefail
+          SAFE_PKG="$(echo "$PKG_NAME" | tr -cd 'A-Za-z0-9._-')"
+          [ -n "$SAFE_PKG" ] || SAFE_PKG="oneui95-a16"
+          mkdir -p dist
+          tar -C out/overlays -czf "dist/overlays-${SAFE_PKG}.tar.gz" .
+          (cd out/overlays && zip -qr "../../dist/overlays-${SAFE_PKG}.zip" .)
+          echo "SAFE_PKG=$SAFE_PKG" >> "$GITHUB_ENV"
+
+      - name: Upload overlay artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: overlays-${{ env.SAFE_PKG }}
+          path: |
+            out/overlays/**
+            dist/overlays-*
+          retention-days: 30
+
+      - name: Commit overlays to packages/<package_name>
+        if: ${{ inputs.commit_to_repo == true }}
+        env:
+          PKG_NAME: ${{ env.SAFE_PKG }}
+        run: |
+          set -euo pipefail
+          mkdir -p "packages/$PKG_NAME"
+          cp -r out/overlays/. "packages/$PKG_NAME/"
+          if [ -f "app-android/packages/${PKG_NAME}.guards.txt" ]; then
+            cp out/overlays/guards.txt "app-android/packages/${PKG_NAME}.guards.txt"
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "packages/$PKG_NAME" "app-android/packages/${PKG_NAME}.guards.txt" 2>/dev/null || git add "packages/$PKG_NAME"
+          if git diff --cached --quiet; then
+            echo "No overlay changes to commit."
+          else
+            git commit -m "Update overlays for packages/$PKG_NAME"
+            git push
+          fi

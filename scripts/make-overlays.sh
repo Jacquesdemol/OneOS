@@ -367,6 +367,32 @@ KEY_DIRS="$KEY_DIRS $(python3 -I "$ROOT/switcher/patches/guest_no_weaver.py" "$W
 # Nor removes templates from the phone's fingerprint and face sensors, where
 # One UI's enrolments live (patches/guest_no_biometric_cleanup.py).
 KEY_DIRS="$KEY_DIRS $(python3 -I "$ROOT/switcher/patches/guest_no_biometric_cleanup.py" "$WORK/services")"
+# Nor removes a template when "Delete" is tapped in Settings, so One UI's
+# enrolments can be carried into the guest safely (patches/guest_no_biometric_remove.py).
+BIO_REMOVE=0
+if BIO_REMOVE_DIRS=$(python3 -I "$ROOT/switcher/patches/guest_no_biometric_remove.py" "$WORK/services" 2>/dev/null); then
+    KEY_DIRS="$KEY_DIRS $BIO_REMOVE_DIRS"
+    BIO_REMOVE=1
+else
+    echo "guest_no_biometric_remove: skipped for this framework" >&2
+fi
+# Non-OneUI guests need AIDL fingerprint fallback, sysfs UDFPS geometry, and optical touch/LHBM bridges
+# when their framework matches those hooks (One UI 9.5 drives Samsung HIDL/FOD directly).
+BIO_AIDL=0; BIO_UDFPS=0; BIO_SEH=0; BIO_TOUCHWATCH=0
+if ! "$DEBUGFS" -R "cat /system/build.prop" "$IMG" 2>/dev/null | grep -q '^ro.build.version.oneui='; then
+    if D=$(python3 -I "$ROOT/switcher/patches/guest_force_aidl_fingerprint.py" "$WORK/services" 2>/dev/null); then
+        KEY_DIRS="$KEY_DIRS $D"; BIO_AIDL=1
+    fi
+    if D=$(python3 -I "$ROOT/switcher/patches/guest_udfps_location.py" "$WORK/services" 2>/dev/null); then
+        KEY_DIRS="$KEY_DIRS $D"; BIO_UDFPS=1
+    fi
+    if D=$(python3 -I "$ROOT/switcher/patches/guest_seh_touch.py" "$WORK/services" 2>/dev/null); then
+        KEY_DIRS="$KEY_DIRS $D"; BIO_SEH=1
+    fi
+    if D=$(python3 -I "$ROOT/switcher/patches/guest_fp_touchwatch.py" "$WORK/services" 2>/dev/null); then
+        KEY_DIRS="$KEY_DIRS $D"; BIO_TOUCHWATCH=1
+    fi
+fi
 # The phone's gatekeeper (screen lock), FRP partition and apexd stay One UI's;
 # guest apps get app ids from 15000 (no keystore namespace shared with One UI's
 # apps) and the guest makes no users or profiles (their per-user keys share
@@ -1173,6 +1199,14 @@ python3 -I "$ROOT/scripts/check-dex.py" $JARS
     echo "# framework overlays built by scripts/make-overlays.sh with the storage, installd, power, sysrq, weaver, biometric, gatekeeper, pdb, apexd, appid15000, nousers, nativeservices, wipesecrets and ksuappid guards, and the secims carve-out (com.sec.imsservice kept in android.uid.system from /system_ext/priv-app/OneOSSecIms only)"
     echo "# installd and IOemNetd codes read on the phone at runtime (OneOSInstalldCodes, OneOSOemNetdCodes): One UI 9.0 and 9.5 phones"
     echo "# charger power from Samsung's charging_type in BatteryService (OneOSChargePower)"
+    if [ "$BIO_REMOVE" = 1 ]; then
+        bio_line="# biometric-remove guard: services_patched.jar never removes a fingerprint or face template (patches/guest_no_biometric_remove.py)"
+        [ "$BIO_AIDL" = 1 ] && bio_line="$bio_line; the fingerprint sensor through AIDL (patches/guest_force_aidl_fingerprint.py)"
+        [ "$BIO_TOUCHWATCH" = 1 ] && bio_line="$bio_line; a finger on the optical sensor from the touch panel (patches/guest_fp_touchwatch.py)"
+        echo "$bio_line"
+    fi
+    [ "$BIO_UDFPS" = 1 ] && echo "# in-display fingerprint place: FingerprintProvider.getWorkaroundSensorProps asks OneOSUdfps (/data/system/oneos_udfps, from the phone's sysfs) first (patches/guest_udfps_location.py)"
+    [ "$BIO_SEH" = 1 ] && echo "# optical sensor: FingerprintProvider.onPointerDown/onPointerUp light the panel's local HBM and send Samsung's touch request first (patches/guest_seh_touch.py, OneOSSehTouch; /data/system/oneos_fp_lhbm)"
     [ "$VOLD_GVLD" = 1 ] && echo "# guest vold name: gvld (vold_patched, service.incremental_patched.so and services_patched.jar)"
     # HyperOS images (miui-services_patched.jar) and Pixel images list their
     # files in the order and with the notes each set was built with.

@@ -92,6 +92,9 @@ if [ "$1" = baseline ]; then
     ( for f in /dev/cpuset/cpus /dev/cpuset/*/cpus /sys/devices/system/cpu/cpu*/core_ctl/enable; do
         [ -f "$f" ] && echo "$f $(cat "$f" 2>/dev/null)"
     done > "$BASE/cpuset" ) &
+    ( for f in /proc/sys/vm/swappiness /proc/sys/vm/vfs_cache_pressure; do
+        [ -r "$f" ] && echo "$f $(cat "$f" 2>/dev/null)"
+    done > "$BASE/vm_sysctl" ) &
     : > "$BASE/svcpid"
     for n in $HOST_NAMES; do ( p=$(svc_pid "$n"); echo "$n ${p:-none}" >> "$BASE/svcpid" ) & done
     ( ls -lZ /dev/watchdog* > "$BASE/watchdog" 2>&1 ) &
@@ -1143,6 +1146,12 @@ done < "$BASE/gc_urgent"
     case "$v" in ''|*[!0-9,-]*) continue ;; esac
     echo "$v" > "$f" 2>/dev/null && say "$f put back to $v (the guest had changed it)"
 done < "$BASE/cpuset"
+[ -f "$BASE/vm_sysctl" ] && [ "$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)" = "$(cat "$BASE/boot_id" 2>/dev/null)" ] && while read -r f v; do
+    [ -w "$f" ] || continue
+    [ "$(cat "$f" 2>/dev/null)" = "$v" ] && continue
+    case "$v" in ''|*[!0-9]*) continue ;; esac
+    echo "$v" > "$f" 2>/dev/null && say "$f put back to $v (the session had changed it)"
+done < "$BASE/vm_sysctl"
 
 # Display: the composer still holds the guest's dead surfaceflinger as its
 # client (guest_start.sh restarted it for the guest); its onrestart starts One

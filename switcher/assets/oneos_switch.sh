@@ -1750,6 +1750,34 @@ if [ "${ONEOS_TOUCH_BOOST:-1}" = 1 ] && [ -w "$IB" ]; then
     esac
 fi
 echo "=== [5/6] $(date +%T) Executing Mount Hierarchy Preparation ==="
+# Reclaim discardable page cache and balance VM pressure before launching the guest container
+# (reduces shared-RAM kswapd0 swap thrashing on Snapdragon 8 Gen 1; return_to_oneui.sh restores baseline).
+if [ "${ONEOS_GUEST_MEM_TUNE:-1}" = 1 ]; then
+    [ -d "$STAGE/inplace_base" ] && [ ! -s "$STAGE/inplace_base/vm_sysctl" ] && {
+        for f in /proc/sys/vm/swappiness /proc/sys/vm/vfs_cache_pressure; do
+            [ -r "$f" ] && echo "$f $(cat "$f" 2>/dev/null)"
+        done > "$STAGE/inplace_base/vm_sysctl"
+    }
+    sync
+    [ -w /proc/sys/vm/drop_caches ] && echo 1 > /proc/sys/vm/drop_caches 2>/dev/null &&
+        echo "Memory: reclaimed clean page caches before container mount"
+    CUR_SW=$(cat /proc/sys/vm/swappiness 2>/dev/null)
+    case "$CUR_SW" in
+        ''|*[!0-9]*) ;;
+        *) if [ "$CUR_SW" -gt 60 ] && [ -w /proc/sys/vm/swappiness ]; then
+               echo 60 > /proc/sys/vm/swappiness 2>/dev/null &&
+                   echo "Memory: vm.swappiness $CUR_SW -> 60 for guest session"
+           fi ;;
+    esac
+    CUR_VFS=$(cat /proc/sys/vm/vfs_cache_pressure 2>/dev/null)
+    case "$CUR_VFS" in
+        ''|*[!0-9]*) ;;
+        *) if [ "$CUR_VFS" -ne 80 ] && [ -w /proc/sys/vm/vfs_cache_pressure ]; then
+               echo 80 > /proc/sys/vm/vfs_cache_pressure 2>/dev/null &&
+                   echo "Memory: vm.vfs_cache_pressure $CUR_VFS -> 80 for guest session"
+           fi ;;
+    esac
+fi
 /system/bin/sh "$STAGE/guest_prepare.sh"
 PREP_RET=$?
 if [ $PREP_RET -ne 0 ]; then
