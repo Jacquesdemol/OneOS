@@ -129,7 +129,7 @@ jobs:
             else
               GDOWN="$(command -v gdown)"
             fi
-            (cd "$DL_DIR" && "$GDOWN" --fuzzy "$IMAGE_URL")
+            (cd "$DL_DIR" && "$GDOWN" "$IMAGE_URL")
             DL_FILE="$(find "$DL_DIR" -maxdepth 1 -type f | head -n 1 || true)"
             [ -n "$DL_FILE" ] && [ -f "$DL_FILE" ] || { echo "ERROR: gdown did not produce a downloaded file"; exit 1; }
             FNAME="$(basename "$DL_FILE")"
