@@ -72,9 +72,12 @@ jobs:
             fuse2fs \
             p7zip-full \
             python3 \
+            python3-pip \
+            python3-venv \
             unzip \
             xz-utils \
-            zip
+            zip \
+            zstd
           sudo apt-get install -y android-sdk-libsparse-utils || sudo apt-get install -y img2simg || true
 
       - name: Ensure Apktool and debug keystore
@@ -117,21 +120,46 @@ jobs:
           DL_FILE="$DL_DIR/$FNAME"
 
           echo "Downloading $IMAGE_URL..."
-          if command -v aria2c >/dev/null 2>&1; then
+          if echo "$IMAGE_URL" | grep -qiE '^https?://drive\.(google|usercontent\.google)\.com/'; then
+            echo "Google Drive URL detected; using gdown..."
+            if ! command -v gdown >/dev/null 2>&1; then
+              python3 -m venv "$RUNNER_TEMP/gdown_venv"
+              "$RUNNER_TEMP/gdown_venv/bin/pip" install -q --no-cache-dir gdown
+              GDOWN="$RUNNER_TEMP/gdown_venv/bin/gdown"
+            else
+              GDOWN="$(command -v gdown)"
+            fi
+            (cd "$DL_DIR" && "$GDOWN" --fuzzy "$IMAGE_URL")
+            DL_FILE="$(find "$DL_DIR" -maxdepth 1 -type f | head -n 1 || true)"
+            [ -n "$DL_FILE" ] && [ -f "$DL_FILE" ] || { echo "ERROR: gdown did not produce a downloaded file"; exit 1; }
+            FNAME="$(basename "$DL_FILE")"
+          elif command -v aria2c >/dev/null 2>&1; then
             aria2c -x 8 -s 8 -k 1M --max-tries=5 --allow-overwrite=true \
               --dir="$DL_DIR" --out="$FNAME" "$IMAGE_URL" || curl -fSL --retry 3 -o "$DL_FILE" "$IMAGE_URL"
           else
             curl -fSL --retry 3 -o "$DL_FILE" "$IMAGE_URL"
           fi
 
-          # Extract archives (.zip, .tar.gz, .tgz, .tar.xz, .xz, .7z, .gz)
+          # Extract archives (.zip, .tar.gz, .tgz, .tar.xz, .xz, .7z, .gz, .zst)
           MAGIC="$(file -b "$DL_FILE" || true)"
-          echo "Downloaded file type: $MAGIC"
+          echo "Downloaded file: $FNAME ($MAGIC)"
+          if [ ! -s "$DL_FILE" ] || echo "$MAGIC" | grep -qiE 'HTML|XML|JSON|ASCII text|UTF-8 Unicode text|empty'; then
+            echo "ERROR: Downloaded payload is not a binary image or archive ($MAGIC)."
+            head -c 400 "$DL_FILE" || true
+            echo ""
+            exit 1
+          fi
           case "$DL_FILE:$MAGIC" in
             *.tar.gz:*|*.tgz:*|*:*"gzip compressed"*tar*)
               tar -xzf "$DL_FILE" -C "$EX_DIR" ;;
             *.tar.xz:*|*.txz:*|*:*"XZ compressed"*tar*)
               tar -xJf "$DL_FILE" -C "$EX_DIR" ;;
+            *.tar.bz2:*|*.tbz2:*|*:*"bzip2 compressed"*tar*)
+              tar -xjf "$DL_FILE" -C "$EX_DIR" ;;
+            *.tar.zst:*|*.tzst:*|*:*"Zstandard compressed"*tar*)
+              tar --zstd -xf "$DL_FILE" -C "$EX_DIR" ;;
+            *.tar:*|*:*"POSIX tar archive"*)
+              tar -xf "$DL_FILE" -C "$EX_DIR" ;;
             *.img.xz:*|*.xz:*|*:*"XZ compressed"*)
               OUT_XZ="$EX_DIR/${FNAME%.xz}"
               [ "$OUT_XZ" = "$EX_DIR/$FNAME" ] && OUT_XZ="$EX_DIR/system.img"
@@ -140,6 +168,10 @@ jobs:
               OUT_GZ="$EX_DIR/${FNAME%.gz}"
               [ "$OUT_GZ" = "$EX_DIR/$FNAME" ] && OUT_GZ="$EX_DIR/system.img"
               gzip -dc "$DL_FILE" > "$OUT_GZ" ;;
+            *.img.zst:*|*.zst:*|*:*"Zstandard compressed"*)
+              OUT_ZST="$EX_DIR/${FNAME%.zst}"
+              [ "$OUT_ZST" = "$EX_DIR/$FNAME" ] && OUT_ZST="$EX_DIR/system.img"
+              zstd -dc "$DL_FILE" > "$OUT_ZST" ;;
             *.zip:*|*:*"Zip archive"*)
               unzip -q "$DL_FILE" -d "$EX_DIR" || 7z x -y "-o$EX_DIR" "$DL_FILE" ;;
             *.7z:*|*:*"7-zip archive"*)
@@ -147,6 +179,13 @@ jobs:
             *)
               mv "$DL_FILE" "$EX_DIR/system.img" ;;
           esac
+
+          # If an extensionless .tar.gz / .tar.xz / .tar.zst decompressed into a tar archive, unpack it
+          TAR_CANDIDATE="$(find "$EX_DIR" -maxdepth 2 -type f \( -name '*.tar' -o -name 'system.img' \) | head -n 1 || true)"
+          if [ -n "$TAR_CANDIDATE" ] && file -b "$TAR_CANDIDATE" | grep -qi "tar archive"; then
+            tar -xf "$TAR_CANDIDATE" -C "$EX_DIR"
+            rm -f "$TAR_CANDIDATE"
+          fi
 
           # Handle Brotli sparse Android images if present (system.new.dat.br + system.transfer.list)
           BR_DAT="$(find "$EX_DIR" -maxdepth 4 -type f -name 'system.new.dat.br' | head -n 1 || true)"
@@ -203,6 +242,13 @@ jobs:
               /usr/sbin/mke2fs -t ext4 -d "$RUNNER_TEMP/erofs_root" "$EXT4_IMG"
               SYS_IMG="$EXT4_IMG"
             fi
+          fi
+
+          if ! /usr/sbin/debugfs -R "stat /system/framework/services.jar" "$SYS_IMG" 2>&1 | grep -q '^Inode:'; then
+            echo "ERROR: $SYS_IMG is not a valid ext2/ext4 system-as-root image containing /system/framework/services.jar"
+            echo "Image type: $(file -b "$SYS_IMG" || true)"
+            /usr/sbin/debugfs -R "ls -l /" "$SYS_IMG" 2>&1 | head -n 40 || true
+            exit 1
           fi
 
           echo "SYSTEM_IMG=$SYS_IMG" >> "$GITHUB_ENV"
