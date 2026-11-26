@@ -38,14 +38,25 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android build-tools and platform
+      - name: Configure Android SDK and install build-tools
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "build-tools;35.0.0" "platforms;android-36"
-          BT_DIR="$(ls -d "$ANDROID_HOME/build-tools"/* | sort -V | tail -n 1)"
+          set -euo pipefail
+          SDK_DIR="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          test -d "$SDK_DIR"
+          echo "ANDROID_HOME=$SDK_DIR" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_DIR" >> "$GITHUB_ENV"
+          sudo chown -R "$(id -un):$(id -gn)" "$SDK_DIR" || true
+          if [ -x "$SDK_DIR/cmdline-tools/latest/bin/sdkmanager" ]; then
+            SDKMANAGER="$SDK_DIR/cmdline-tools/latest/bin/sdkmanager"
+          else
+            SDKMANAGER="$(ls -d "$SDK_DIR"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V | tail -n 1)"
+          fi
+          test -x "$SDKMANAGER"
+          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
+          echo "$SDK_DIR/platform-tools" >> "$GITHUB_PATH"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" --install "platform-tools" "build-tools;35.0.0" "platforms;android-36"
+          BT_DIR="$(ls -d "$SDK_DIR/build-tools"/* | sort -V | tail -n 1)"
           echo "$BT_DIR" >> "$GITHUB_PATH"
 
       - name: Install host extraction and image tools
