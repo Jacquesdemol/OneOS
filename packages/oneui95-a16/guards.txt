@@ -1,0 +1,23 @@
+# framework overlays built by scripts/make-overlays.sh with the storage, installd, power, sysrq, weaver, biometric, gatekeeper, pdb, apexd, appid15000, nousers, nativeservices, wipesecrets and ksuappid guards, and the secims carve-out (com.sec.imsservice kept in android.uid.system from /system_ext/priv-app/OneOSSecIms only)
+# installd and IOemNetd codes read on the phone at runtime (OneOSInstalldCodes, OneOSOemNetdCodes): One UI 9.0 and 9.5 phones
+# charger power from Samsung's charging_type in BatteryService (OneOSChargePower)
+# biometric-remove guard: services_patched.jar never removes a fingerprint or face template (patches/guest_no_biometric_remove.py)
+# guest vold name: gvld (vold_patched, service.incremental_patched.so and services_patched.jar)
+# framework_patched.jar: the image's framework.jar with One UI's camera transaction codes (patches/pixel_camera_abi.py)
+# telephony-common_patched.jar: the SMS service centre as an international number (patches/guest_smsc_international.py); SEND_SMS error 66 (sent, no result payload) counted as sent (patches/guest_sms_invalid_response.py)
+# libcamera_client_patched.so, libcameracompatbilityinfo_patched.so: the native camera client with One UI's codes (patches/pixel_camera_native.py)
+# r5 (oneui8test11): services_patched.jar adds an empty android.net.ConnectivityCallListenerService (patches/a16_call_listener_stub.py; One UI 8 has no such class, system_server died at the first call)
+# r6 (oneui8test12): services_patched.jar lets a boot phase go on past Android 17's "Missing attribution tag for system component" (patches/a16_boot_phase_attribution.py; One UI 8 Nearby -> BLE at boot phase 1000)
+# oneui95-a16 r4 (oneui8test7): services_patched.jar, framework_patched.jar and telephony-common_patched.jar also call the connectivity members One UI 8's Android 16 tethering module does not have only in a try block with the Android 16 fallback (patches/a16_connectivity_compat.py)
+# r7 (0.5.39): framework_patched_oneui8.jar, framework_patched.jar with One UI 8's camera codes (switcher/patches/a16_camera.py, host_camera_oneui8.txt; guest_prepare.sh binds it on a One UI 8 phone and turns the camera on)
+# 0.5.42 (oneui95_a16_r8): services_patched.jar with the guest's own screen lock (patches/guest_local_lock.py, adapted to One UI 9.5's R8 build)
+# 0.5.45 (oneui95_a16_r9): framework_patched_oneui85.jar, framework_patched.jar with One UI 8.5's camera codes (switcher/patches/a16_camera.py with ONEOS_A16_CAMERA_HOST=oneui85, host_camera_oneui85.txt)
+8718d43ced81a72ff5ab6db4ec9a9fd7b7c224bacaf56f7f95fb55a82b1a0eda  services_patched.jar
+22c4b0b701d623fc523f3be7e852716b4db384a00783fb6aad0cca9d6c30e941  vold_patched
+1ba375398bf0735df28af2d8e6ab5cd3e5609669e11f1f6dad503bc6e1568655  service.incremental_patched.so
+b07ef781765d2f25cd0c7d76f79817500e1c238a32d9891c8990f900687fb956  framework_patched.jar
+6ff8de9fd13739384dc426e7be7571ce39fcb945e4f089e22f1b6740bd442d39  telephony-common_patched.jar
+23d98173e40ce788bc66d4a9678d06869fe5010ade40f001128b30c17ea57e7a  libcamera_client_patched.so
+720014ae5f57472b16183a563e1761798df3369a9dabe48a834158a5e2a9ce40  libcameracompatbilityinfo_patched.so
+0dfe4ab44690dd403deab1f3f46a991fd2f0aac52dbdb96be87656c4ad583333  framework_patched_oneui8.jar
+5c59aa4e9bb837643d9051c122af199c3b74bb43b17ec0bcf0435baf0c6abd59  framework_patched_oneui85.jar
