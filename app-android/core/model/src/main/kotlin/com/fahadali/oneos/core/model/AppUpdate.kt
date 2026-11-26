@@ -9,7 +9,7 @@ package com.fahadali.oneos.core.model
  *
  * ```
  * {"versionCode": 58, "versionName": "0.4.42", "bytes": 52428800, "sha256": "<64 hex>",
- *  "apk": "https://github.com/fahadalijaved/OneOS/releases/download/v0.4.42/OneOS-0.4.42.apk"}
+ *  "apk": "https://github.com/Jacquesdemol/OneOS/releases/download/v0.4.42/OneOS-0.4.42.apk"}
  * ```
  */
 data class AppUpdate(
@@ -33,8 +33,8 @@ data class AppUpdate(
     fun changes(imageId: String): Boolean = "*" in systems || imageId in systems
 
     companion object {
-        const val URL = "https://github.com/fahadalijaved/OneOS/releases/latest/download/update.json"
-        const val APK_PREFIX = "https://github.com/fahadalijaved/OneOS/releases/download/"
+        const val URL = "https://github.com/Jacquesdemol/OneOS/releases/latest/download/update.json"
+        const val APK_PREFIX = "https://github.com/Jacquesdemol/OneOS/releases/download/"
 
         /**
          * The team's test channel (Debug settings): an update.json in the owner's own Drive, outside

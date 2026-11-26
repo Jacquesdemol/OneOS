@@ -171,7 +171,7 @@ def test_wired_fixes() -> None:
     for prop in (
         "dalvik.vm.boot-dex2oat-threads=2",
         "dalvik.vm.dex2oat-threads=2",
-        "dalvik.vm.dex2oat-Xmx=256m",
+        "dalvik.vm.dex2oat-Xmx=512m",
         "dalvik.vm.dex2oat-minidebuginfo=false",
     ):
         assert prop in gprops

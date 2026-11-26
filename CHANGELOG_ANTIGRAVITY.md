@@ -162,3 +162,119 @@ Sessão de análise e correções baseada no protocolo [Sync.md](file:///data/da
 - Para resolver `io.github.tribalfs:oneui-design` e os pacotes `sesl.*` (`sesl9`) do proprietário `tribalfs` em cache frio no GitHub Actions, configure nos **Repository Secrets** (`Settings -> Secrets and variables -> Actions`):
   - **`GH_PACKAGES_TOKEN`** (ou **`GPR_TOKEN`**): um Personal Access Token (Classic) do GitHub com o escopo **`read:packages`**.
   - **`GH_PACKAGES_USER`** (ou **`GPR_USER`**, opcional): usuário GitHub dono do PAT (se omitido, usa `${{ github.actor }}`).
+
+---
+
+## Correções Fases 1–6 (`hwga.md` — `SM-S908E`, App `0.5.46 (189)`, `oneui95-s948b`)
+
+Análise baseada nos logs completos em `/data/data/com.termux/files/home/agy/oneos-logs/` para `SM-S908E` (`s-ultra-8450`, host One UI 8.0 / SDK 36, guest `oneui95-s948b`).
+
+### Fase 1 — Isolamento do Repositório (`Jacquesdemol/OneOS`) e Desativação de Auto-Update
+- [AppUpdate.kt](file:///data/data/com.termux/files/home/agy/OneOS/app-android/core/model/src/main/kotlin/com/fahadali/oneos/core/model/AppUpdate.kt#L12-L37) e [AppUpdateTest.kt](file:///data/data/com.termux/files/home/agy/OneOS/app-android/core/model/src/test/kotlin/com/fahadali/oneos/core/model/AppUpdateTest.kt#L12-L56): URL de `update.json`, `APK_PREFIX` e fixtures apontados exclusivamente para `Jacquesdemol/OneOS` (rejeitando `fahadalijaved/OneOS` nos testes de validação).
+- [Images.kt](file:///data/data/com.termux/files/home/agy/OneOS/app-android/core/model/src/main/kotlin/com/fahadali/oneos/core/model/Images.kt#L119): `GOFILE_FOLDER_URL` alterado para `https://github.com/Jacquesdemol/OneOS#where-the-images-come-from`. Mantidos os downloads de imagens/artefatos em `fahadalijaved/OneOS-files`, pois `Jacquesdemol/OneOS-files` não existe (`404`).
+- [release-app.py](file:///data/data/com.termux/files/home/agy/OneOS/scripts/release-app.py#L40): `REPO` alterado para `"Jacquesdemol/OneOS"`.
+- [AppUpdater.kt](file:///data/data/com.termux/files/home/agy/OneOS/app-android/app/src/full/kotlin/com/fahadali/oneos/session/AppUpdater.kt), [EditionHome.kt](file:///data/data/com.termux/files/home/agy/OneOS/app-android/app/src/full/kotlin/com/fahadali/oneos/ui/EditionHome.kt), [SystemsActivity.kt](file:///data/data/com.termux/files/home/agy/OneOS/app-android/app/src/full/kotlin/com/fahadali/oneos/ui/SystemsActivity.kt) e [EnvironmentActivity.kt](file:///data/data/com.termux/files/home/agy/OneOS/app-android/app/src/full/kotlin/com/fahadali/oneos/ui/EnvironmentActivity.kt):
+  - Removida verificação automática de atualização em `onResume()` de `EditionHome` / `SystemsActivity` e bloqueado `AppUpdater.check(ctx, force = false)` exceto quando `force = true` ou `testUrl != null`.
+  - Protegida a leitura `PatchChannels.stableRelease()` em `checkPatches()` com `runCatching { ... }.getOrNull()`.
+
+### Fase 2 — Desempenho, Aquecimento, `dex2oat64`, Teto de CPU e Taxa de Atualização
+- **Causa raiz nos logs (`oneos-logs`):**
+  1. Os logs rodavam build `0.5.46 (189)` anterior à mitigação preventiva de `HOTWORD` ADSP SSR (`adsprpcd` / `rproc_recovery_wq` consumindo até 38,7% de CPU).
+  2. `dex2oat64` (PID 6167) abortou com `SIGABRT` (`art::ClassLinker::InitWithoutImage -> FindSystemClass -> Thread::SetException`, saída `81` do `odrefresh --compile`) por falta de heap (`dalvik.vm.dex2oat-Xmx=256m`).
+  3. O `performance_handover.log` registrou o SSRM do host mantendo `cpufreq_max_limit=1843200` kHz após a troca; `heat_cap` não liberava `-1` na inicialização e derrubava o teto imediatamente para `level 2 (65%)` com `dchg_temp` em `52 °C` (`>= 48,0 °C`), enquanto a temperatura de pele estava em apenas `41,4 °C`.
+  4. `GUEST_THERMAL_MAP` excluía guests `oneui` (o guest viu `Thermal Status: 3` `SEVERE` aos `43,8 °C` de pele em `diag_40_thermal.txt`).
+  5. `panel_keeper` esperava dois ciclos de 15 s (16 s a `24 Hz`) antes do primeiro ajuste de SurfaceFlinger para `120 Hz`.
+- **Alterações aplicadas:**
+  - [guest_props.sh](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/guest_props.sh#L2133): `dalvik.vm.dex2oat-Xmx` elevado de `256m` para `512m`.
+  - [oneos_switch.sh](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/oneos_switch.sh#L4640-L4835):
+    - Habilitado `GUEST_THERMAL_MAP=1` também para imagens `oneui*`.
+    - Liberação imediata de host `cpufreq_max_limit` (`echo -1 > ...` + registro em `$STAGE/cpufreq_max_limit.released`) no início do `heat_cap` quando `HEAT_CAP=1` e `HOST_LOW_POWER=0`.
+    - Limiares `dchg_temp` do `heat_cap` ajustados de `440`/`480` (`44 °C`/`48 °C`) para `520`/`560` (`52 °C`/`56 °C` com histerese de `2 °C`).
+    - `panel_keeper` passa a consultar a cada `4 s` nos 10 primeiros ticks enquanto `kicks = 0` e dispara o kick já no primeiro ciclo em baixa taxa de quadros.
+
+### Fase 3 — Correção de Crash e Queda de Frames na `SamsungCamera`
+- **Causa raiz nos logs (`oneos-logs`):**
+  1. `boot.log.02:107638` registrou `W NodeFeatureLoader: loadNodeFeature - invalid node feature name [image_codec.samsung.v1]`, abortando a thread `PostProcessThread` da `SamsungCamera` (`IllegalStateException: ImageCodecDummyNode can't initialize`) porque a `NodeFeature$NodeFeatureVersion` da One UI 9.5 aceita apenas `image_codec.samsung.v2`.
+  2. O parcelamento de `CaptureResultExtras` do Android 17 lê `MultiResConcurrentReadersStartInfo[]` (`createTypedArray`) após o fim do `CaptureResultExtras` escrito pela câmera do host One UI 8, consumindo os bytes seguintes de `onCaptureStarted` e causando `10.502` falhas de `BadParcelableException` (`unread size: 4` / alocação inválida).
+- **Alterações aplicadas:**
+  - [a16_camera.py](file:///data/data/com.termux/files/home/agy/OneOS/switcher/patches/a16_camera.py#L53-L95): Adicionado `patch_capture_result_extras(root, orig)`, que copia `CaptureResultExtras.smali` de `orig` e zera a leitura de `MultiResConcurrentReadersStartInfo.CREATOR` (`createTypedArray` substituído por `const/4 ..., 0x0` + `iput-object`) dentro de `readFromParcel(Parcel)`.
+  - [guest_prepare.sh](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/guest_prepare.sh#L8644-L8672): Na mesclagem de `oneos_system_floating_feature.xml`, adicionados `tag_val()`, `img_codec_tok()` e `merge_vendor_lib()` para preservar o token `image_codec.*` do guest (`image_codec.samsung.v2`) dentro da chave `SEC_FLOATING_FEATURE_CAMERA_CONFIG_VENDOR_LIB_INFO` vinda do host.
+
+### Fase 4 — Curva de Brilho Automático e Configuração de Painel (`SM-S908E`)
+- **Causa raiz nos logs (`oneos-logs`):**
+  1. No build `0.5.46`, `Display config: read-only overlay on product/etc refused, left out` deixou ativo o perfil de backlight do S26 Ultra (`DisplayDeviceConfig: backlight max=1275`, `mBrightnessMax=5.0` vs `2.4` do `SM-S908E`), limitando o brilho real de hardware a ~14–15% mesmo com o slider em >90%.
+  2. A mesclagem de `oneos_system_floating_feature.xml` cobria apenas `CAMERA` e `BIOAUTH`, mantendo ativas chaves `SEC_FLOATING_FEATURE_LCD_*` do doador S26 Ultra (`PRIVACY_DISPLAY=1`, `NIGHT_DIM=1`, `HW_MDNIE=QC`, `HFR_MODE=4`).
+- **Alterações aplicadas:**
+  - [guest_prepare.sh](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/guest_prepare.sh#L2123): No caminho `bind-farm` de `$PETC/displayconfig`, adicionados `mount --make-rslave "$PETC/displayconfig"` e `remount,ro "$DOV"`.
+  - [guest_prepare.sh](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/guest_prepare.sh#L8618-L8672): Estendida a mesclagem do `oneos_system_floating_feature.xml` para incluir as chaves `SEC_FLOATING_FEATURE_LCD_*` do host (`CAMERA|BIOAUTH|LCD`).
+
+### Fase 5 — Diagnóstico e Validação de FOD (`QBT2608` Ultrassônico)
+- **Achados nos logs (`oneos-logs`) e no `services_patched.jar` local:**
+  - O host limpou `/data/system/users/0/settings_fingerprint_0.xml` (`boot.log.03:19034` -> `fp_remove_all: user=0`) ao remover o bloqueio do host antes da troca, e o `guards.txt` da build `0.5.46` não possuía `# biometric-remove guard`.
+  - Dentro do guest, o cadastro nativo via Configurações falha no TEE/HIDL (`bauth_FPBAuthService: enroll hat is 0` -> `error=8, vendor=1003` -> `BiometricSysUiManager: show: No exist ID`) porque `QBT2608` valida o HMAC TEE do `HardwareAuthToken` do Gatekeeper, inexistente no bloqueio local `OneOSGuestLock`.
+  - Validado sobre o smali de `services_patched.jar` que tanto `guest_no_biometric_cleanup.py` quanto `guest_no_biometric_remove.py` aplicam sem erros (`SemFingerprintRemovalClient` inexistente; remoção protegida em `FingerprintRemovalClient`/`FaceRemovalClient`), enquanto `FingerprintProvider/defaultHIDL`, `showUdfpsIcon` e `setTspMode` já operam normalmente nos logs.
+  - **Pré-requisito de uso:** cadastrar as digitais na One UI host **sem remover o bloqueio de tela do host** e reconstruir `packages/oneui95-a16` para ativar `# biometric-remove guard`.
+
+### Fase 6 — Análise do Módulo `MuhammedAliMizrakTR/OneOS` (`SwBridge IO v2.0` / PR #110) e Revisão do PR #107
+- **Veredito técnico sobre `OneOS_Sw_Bridge_IO_v2.zip` / PR #110 — REJEITADO / NÃO APLICADO:**
+  - O núcleo em `scripts/oneos_core.sh` executa `locksettings clear --old "$pin"` + `locksettings set-disabled true` + `rm -f /data/system/gatekeeper.password.key /data/system/gatekeeper.pattern.key` antes da troca (`SwOUT`) e restaura o PIN via `locksettings set-pin/password "$pin"` (`SwIN`), gravando o PIN em texto puro em `/data/adb/oneos_helper/config.json`.
+  - **Obstáculos críticos no `SM-S908E`:**
+    1. Chamar `locksettings clear` na One UI 8 dispara `FingerprintService.removeAll` (`fp_remove_all`), apagando todas as digitais `QBT2608` antes mesmo de o guest subir — anulando a preservação biométrica da Fase 5.
+    2. Remover `gatekeeper.*.key` diretamente em `/data/system` cria risco de dessincronia de FBE / `SyntheticPassword`.
+    3. Armazenamento de credencial do usuário em texto puro no `/data/adb/oneos_helper/config.json`.
+    4. Inconsistência entre `README_EN.md` (que descreve backup/restore de permissões KernelSU `ManualSUBak`) e o `oneos_core.sh` v2.0 (onde essa lógica foi removida), além de ser funcionalmente redundante frente ao isolamento já feito por `guest_no_weaver.py`, `guest_no_gatekeeper.py`, `guest_local_lock.py` e `guest_no_biometric_remove.py`.
+- **Revisão e endurecimento do PR #107 (`Faster OneOS starts and returns`, já integrado ao upstream):**
+  - [check_host_apex.sh](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/check_host_apex.sh#L32-L35): Adicionado `[ "$n" -eq 0 ] && continue` antes de `find ... | xargs -0 cat`, evitando que o `xargs -0` do BusyBox/toybox (sem `-r`) execute `cat` bloqueado em `stdin` quando um APEX não contiver arquivos regulares.
+  - [oneos_switch.sh](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/oneos_switch.sh#L620): Substituída a expansão direta `${R#*displayHeight=}` por `cut_after "$R" 'displayHeight=' ' '`, padronizando a guarda contra ausência do marcador na extração de `HDH`.
+  - [guest_prepare.sh](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/guest_prepare.sh#L675-L678): Reforçada a checagem de cache em `sec_ims_stage()` para confirmar a presença de `$SECIMS/priv-app/OneOSSecIms/imsservice.apk` e `$SECIMS/framework/oneos-secims-compat.jar` além de `.stamp`.
+  - [guest_props.sh](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/guest_props.sh#L2373-L2385): Adicionado `if (eq <= 1) continue` e `close(...)` na leitura de `nowf`/`blankf`/`snapf` do awk de `restore-persist`, impedindo chaves vazias caso haja linhas malformadas.
+
+> **Ação obrigatória de build (CI):**
+> 1. Reconstruir `packages/oneui95-a16` (`framework_patched_oneui8.jar` / `services_patched.jar` / `guards.txt`) via [build-overlays.yml](file:///data/data/com.termux/files/home/agy/OneOS/.github/workflows/build-overlays.yml) para incluir `patch_capture_result_extras` (`a16_camera.py`) e `# biometric-remove guard` (`guest_no_biometric_remove.py`).
+> 2. Recompilar o APK do app Android (`app-android`) via [build-apk.yml](file:///data/data/com.termux/files/home/agy/OneOS/.github/workflows/build-apk.yml) (ou Gradle local) para incluir os ajustes das Fases 1–4 e 6.
+
+### Checklist de Verificação no Aparelho (Termux / ADB após Nova Sessão no Guest)
+1. **Isolamento de Repositório e Auto-Update (Fase 1):**
+   - Abrir o app OneOS (`EditionHome`, `SystemsActivity`) no host sem tráfego de rede automático para `fahadalijaved/OneOS`.
+   - Confirmar via botão manual de verificação na UI que erros de `PatchChannels` não fecham a tela (`EnvironmentActivity`).
+2. **Desempenho, Térmica, `dex2oat64` e Refresh Rate (Fase 2):**
+   - No host via ADB/Termux durante a sessão:
+     ```sh
+     cat /data/local/tmp/oneos/heat_cap.log | tail -n 30
+     cat /data/local/tmp/oneos/panel_keeper.log | tail -n 20
+     grep -E 'dex2oat64|odrefresh' /data/local/tmp/oneos/boot.log* | head -n 40
+     ```
+   - Confirmar liberação inicial de `cpufreq_max_limit` (`->-1`), mapa térmico ativo em skin `< 47 °C` (`NONE`), ausência de `SIGABRT` em `dex2oat64` e resposta imediata de `panel_keeper` para `120 Hz` (`/sys/class/lcd/panel/vrr`).
+3. **Câmera (`SamsungCamera` — Fase 3):**
+   - Confirmar após rebuild de `oneui95-a16`:
+     ```sh
+     grep -E 'ImageCodecDummyNode|loadNodeFeature|BadParcelableException|CaptureResultExtras' /data/local/tmp/oneos/boot.log*
+     grep 'CAMERA_CONFIG_VENDOR_LIB_INFO' /data/local/tmp/oneos/data/oneos_system_floating_feature.xml
+     ```
+   - Testar abertura da câmera, preview contínuo, captura de foto e troca de lentes (UW/1x/3x/10x) sem fechamento nem quedas repetidas de `onCaptureStarted`.
+4. **Brilho Automático e Configuração de Painel (Fase 4):**
+   - Conferir nos logs da sessão:
+     ```sh
+     grep -E 'Display config|brightnessMaximum|DisplayDeviceConfig' /data/local/tmp/oneos/takeover_app.log /data/local/tmp/oneos/boot.log*
+     grep 'FLOATING_FEATURE_LCD_' /data/local/tmp/oneos/data/oneos_system_floating_feature.xml
+     ```
+   - Confirmar montagem bem-sucedida de `displayconfig` (via bind-farm sem recusa read-only) e slider em ambiente externo atingindo ~400+ nits no `SM-S908E`.
+5. **FOD Ultrassônico (`QBT2608` — Fase 5):**
+   - Garantir digital cadastrada na One UI host (PIN/padrão ativo, sem usar módulos como `SwBridge`), verificar `# biometric-remove guard` em `guards.txt`, iniciar o guest e confirmar desbloqueio na tela de bloqueio sem re-cadastro dentro do guest.
+
+---
+
+## Correção Adicional de Áudio QTI PAL/ADSP (`oneos-logs` pós-sync)
+
+### Causa Raiz Confirmada em `/data/data/com.termux/files/home/agy/oneos-logs/` e no Bytecode
+1. Até `18:49:58.959` (`boot.log.03`), a reprodução e o `SoundAlive` operavam sem erros de HAL. No instante `18:49:58.959`, `com.google.android.googlequicksearchbox` (`SoundTriggerMiddlewareLogging: ATTACH [client= "com.google.android.googlequicksearchbox1trusted"]`) carregou `HOTWORD` (`va-mic-mono-lpi`) via `PAL: StreamSoundTrigger: LoadSoundModel`, derrubando `msm/adsp/audio_pd` (`ar_osal_pd_notifier_cb state(0)`) `109 ms` depois e quebrando todos os streams `StreamPCM` (`pcm_write failed`, `pcm_start failed -102`, `pal_stream_open failed with status -5`), enquanto o `PAL` (`vendor.audio-hal`, PID `30262`) entrava em loop automático `StSSR -> LoadSoundModel -> crash` a cada `500 ms` até depois do retorno à One UI (`18:53:35`).
+2. **Falhas encontradas na mitigação anterior do `guest_start.sh` (`e494c70`):**
+   - Em `hotword_off()` (`guest_start.sh`), `logcat -s "PAL: SoundTriggerEngineGsl:E" "PAL: StreamSoundTrigger:I" "PAL: SndMonitor:I"` usava nomes com espaços em vez da tag real **`PAL`**, fazendo o `logcat` descartar todas as linhas `PAL` e impedir a detecção do loop QTI.
+   - Em `audio_keeper`, a condição `[ ! -f /data/oneos_hotword_off.log ] && [ ! -f /data/oneos_hotword_preblocked ]` desabilitava totalmente o monitoramento reativo assim que o pré-bloqueio criava o arquivo marcador.
+   - A inspeção em bytecode de `SoundTriggerMiddlewarePermission.enforcePermissionForPreflight()` em `services_patched.jar` demonstrou que `PERMISSION_SOFT_DENIED (1)` (retornado por `MODE_IGNORED` / `appops set ... ignore`) ainda é **aceito** pelo middleware (`if-eq p0, v0, :cond_1 -> return-void`), exigindo `MODE_ERRORED` (**`deny`**) para gerar `PERMISSION_HARD_DENIED (2)`.
+
+### Alterações Aplicadas
+- [guest_start.sh](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/guest_start.sh):
+  - Pré-bloqueio `apply_hw_preblock()` passa a aplicar `cmd appops set "$hw" RECORD_AUDIO_HOTWORD deny` (com fallback `ignore`), registra resultado detalhado em `/data/oneos_hotword_preblock.log` e reaplica após `20 s`.
+  - Em `hotword_off()` / `audio_keeper`: corrigido filtro do `logcat` para `-s "PAL:I" "COSR:I" "SoundTriggerMiddlewareLogging:I" "*:S"`, incluída detecção de `SessionAlsaPcm:.*pcm_(start|write) failed` com `state(0)`/`card status 0`, removido o bloqueio pelo arquivo `/data/oneos_hotword_preblocked` (substituído por cooldown de `20 s` e limite de `5` intervenções por sessão), extraído dinamicamente o cliente anexado em `SoundTriggerMiddlewareLogging: ATTACH` e mantido reinício coordenado de `vendor.audio-hal*` + `audioserver`.
+- [test-qti-hotword-guard.py](file:///data/data/com.termux/files/home/agy/OneOS/scripts/test-qti-hotword-guard.py): adicionada suíte unitária validando ausência de apóstrofos em `audio_keeper`, filtro `"PAL:I"`, `RECORD_AUDIO_HOTWORD deny`, parsing dinâmico do cliente em log real e cooldown.

@@ -31,6 +31,7 @@ for m in $modules; do
     [ -d "/apex/$m" ] || continue
     n=$(find "/apex/$m" -type f 2>/dev/null | wc -l)
     files=$((files + n))
+    [ "$n" -eq 0 ] && continue
     if ! find "/apex/$m" -type f -print0 2>/dev/null | xargs -0 cat > /dev/null 2>&1; then
         for f in $(find "/apex/$m" -type f 2>/dev/null); do
             cat "$f" > /dev/null 2>&1 || {

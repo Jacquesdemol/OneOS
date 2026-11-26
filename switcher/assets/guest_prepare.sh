@@ -672,7 +672,9 @@ sec_ims_stage() {
         /system/framework/vsimmanager.jar /system/framework/EpdgManager.jar; do
         if [ -e "$f" ]; then stat -c '%n %s %Y' "$f"; else echo "$f absent"; fi
     done | sha256sum | cut -d' ' -f1)
-    if [ -f "$SECIMS/.stamp" ] && [ "$(cat "$SECIMS/.stamp" 2>/dev/null)" = "$st" ]; then
+    if [ -f "$SECIMS/.stamp" ] && [ "$(cat "$SECIMS/.stamp" 2>/dev/null)" = "$st" ] &&
+       [ -f "$SECIMS/priv-app/OneOSSecIms/imsservice.apk" ] &&
+       [ -f "$SECIMS/framework/oneos-secims-compat.jar" ]; then
         echo "Samsung IMS in the guest: staged set unchanged ($(du -sk "$SECIMS" 2>/dev/null | cut -f1) KB cached)"
         return 0
     fi
@@ -2117,7 +2119,11 @@ else
                 done
             fi
         elif farm_dir "$PETC" "$STAGE/product_etc_farm" displayconfig/ && [ -d "$PETC/displayconfig" ]; then
-            $BB mount --bind "$DOV/up/displayconfig" "$PETC/displayconfig" && ddc_ok=1
+            if $BB mount --bind "$DOV/up/displayconfig" "$PETC/displayconfig"; then
+                $BB mount --make-rslave "$PETC/displayconfig" 2>/dev/null || true
+                $BB mount -o remount,ro "$DOV" 2>/dev/null || true
+                ddc_ok=1
+            fi
         fi
         if [ "$ddc_ok" = 1 ]; then
             echo "Display config: product/etc/displayconfig/display_port_ for ports ${DDC_PORTS:-none} via bind-farm (no overlayfs; One UI's nits curve, brightnessMaximum${DDC_MAX:- none}$([ $DDC_PROX = 1 ] && echo ", Samsung's IR proximity"))"
@@ -8612,33 +8618,66 @@ if grep -q '^ro.build.version.oneui=' "$ROOTFS/system/build.prop" 2>/dev/null &&
         fi
     fi
     # The image's own /system/etc/floating_feature.xml (MysticGSI keeps the S26 Ultra's there, and the
-    # guest's framework reads it) names the S26 Ultra's cameras: SEC_FLOATING_FEATURE_CAMERA_CONFIG_CAMID_TELE2
-    # 54, TELE 52, WIDE 56, UW 58. A phone without one of them took the S26 Ultra's (11-19 report 911eea3a,
-    # S23: "There is no capability for : 54", the second telephoto's zoom, the camera closed). Every
-    # SEC_FLOATING_FEATURE_CAMERA_* line of that list becomes the phone's own (removed where the phone has
-    # none); the software ones of $FF_ADD stay the image's. Bound by guest_start.sh.
+    # guest's framework reads it) names the S26 Ultra's cameras, biometrics, and panel (LCD) features
+    # (such as PRIVACY_DISPLAY=1, HW_MDNIE=QC, NIGHT_DIM=1, HFR_MODE=4). Every CAMERA/BIOAUTH/LCD
+    # line of that list becomes the phone's own (removed where the phone has none), keeping the image's
+    # image_codec.* node token and any software overrides in $FF_ADD. Bound by guest_start.sh.
     SFF="$ROOTFS/system/etc/floating_feature.xml"
     PFF=/system/etc/floating_feature.xml
     grep -q '<SEC_FLOATING_FEATURE_CAMERA_' "$PFF" 2>/dev/null || PFF=/vendor/etc/floating_feature.xml
     if [ "${ONEOS_ONEUI_FLOATING:-1}" = 1 ] && [ -f "$SFF" ] &&
-       { grep -q '<SEC_FLOATING_FEATURE_CAMERA_' "$PFF" 2>/dev/null || grep -q '<SEC_FLOATING_FEATURE_BIOAUTH_' "$PFF" 2>/dev/null; }; then
+       { grep -q -E '<SEC_FLOATING_FEATURE_(CAMERA|BIOAUTH|LCD)_' "$PFF" 2>/dev/null; }; then
         if awk -v pf="$PFF" -v addf="$FF_ADD" '
             function host_key(s,    k) {
-                if (match(s, /<SEC_FLOATING_FEATURE_CAMERA_[A-Z0-9_]+>/) || match(s, /<SEC_FLOATING_FEATURE_BIOAUTH_[A-Z0-9_]+>/)) {
+                if (match(s, /<SEC_FLOATING_FEATURE_CAMERA_[A-Z0-9_]+>/) ||
+                    match(s, /<SEC_FLOATING_FEATURE_BIOAUTH_[A-Z0-9_]+>/) ||
+                    match(s, /<SEC_FLOATING_FEATURE_LCD_[A-Z0-9_]+>/)) {
                     return substr(s, RSTART + 1, RLENGTH - 2)
                 }
                 return ""
             }
+            function tag_val(s,    st, en) {
+                st = index(s, ">"); en = index(s, "</")
+                if (st > 0 && en > st) return substr(s, st + 1, en - st - 1)
+                return ""
+            }
+            function img_codec_tok(val,    m, i, t) {
+                m = split(val, t, ",")
+                for (i = 1; i <= m; i++) {
+                    gsub(/^[ \t]+|[ \t]+$/, "", t[i])
+                    if (t[i] ~ /^image_codec\./) return t[i]
+                }
+                return ""
+            }
+            # Preserve the image camera node version for image_codec (One UI 9.5 SamsungCamera only accepts
+            # image_codec.samsung.v2 and crashes PostProcessThread on ImageCodecDummyNode with host v1).
+            function merge_vendor_lib(h_line, g_codec,    k_tag, s, e, v, m, i, t, out) {
+                if (g_codec == "") return h_line
+                k_tag = "<SEC_FLOATING_FEATURE_CAMERA_CONFIG_VENDOR_LIB_INFO>"
+                if ((s = index(h_line, k_tag)) <= 0 || (e = index(h_line, "</SEC_FLOATING_FEATURE_CAMERA_CONFIG_VENDOR_LIB_INFO>")) <= s) return h_line
+                v = substr(h_line, s + length(k_tag), e - s - length(k_tag))
+                m = split(v, t, ","); out = ""
+                for (i = 1; i <= m; i++) {
+                    gsub(/^[ \t]+|[ \t]+$/, "", t[i])
+                    if (t[i] == "") continue
+                    if (t[i] ~ /^image_codec\./) t[i] = g_codec
+                    out = out (out == "" ? "" : ",") t[i]
+                }
+                return substr(h_line, 1, s + length(k_tag) - 1) out substr(h_line, e)
+            }
             BEGIN { while ((getline l < pf) > 0) { k = host_key(l); if (k != "") { if (!(k in cam)) order[++n] = k; cam[k] = l } }
-                    while ((getline l < addf) > 0) if (l ~ /^SEC_FLOATING_FEATURE_(CAMERA|BIOAUTH)_[A-Z0-9_]+=/) keep[substr(l, 1, index(l, "=") - 1)] = 1 }
+                    while ((getline l < addf) > 0) if (l ~ /^SEC_FLOATING_FEATURE_(CAMERA|BIOAUTH|LCD)_[A-Z0-9_]+=/) keep[substr(l, 1, index(l, "=") - 1)] = 1 }
             { line = $0; k = host_key(line)
-              if (k != "") { if (!(k in keep)) { if (k in cam) { print cam[k]; done[k] = 1 }; next } }
-              if (line ~ /<\/SecFloatingFeatureSet>/) for (i = 1; i <= n; i++) if (!(order[i] in done) && !(order[i] in keep)) print cam[order[i]]
+              if (k != "") {
+                  if (k == "SEC_FLOATING_FEATURE_CAMERA_CONFIG_VENDOR_LIB_INFO") guest_codec = img_codec_tok(tag_val(line))
+                  if (!(k in keep)) { if (k in cam) { print (k == "SEC_FLOATING_FEATURE_CAMERA_CONFIG_VENDOR_LIB_INFO" ? merge_vendor_lib(cam[k], guest_codec) : cam[k]); done[k] = 1 }; next }
+              }
+              if (line ~ /<\/SecFloatingFeatureSet>/) for (i = 1; i <= n; i++) if (!(order[i] in done) && !(order[i] in keep)) print (order[i] == "SEC_FLOATING_FEATURE_CAMERA_CONFIG_VENDOR_LIB_INFO" ? merge_vendor_lib(cam[order[i]], guest_codec) : cam[order[i]])
               print line }' "$SFF" > "$STAGE/data/oneos_system_floating_feature.xml.tmp" &&
            grep -q '</SecFloatingFeatureSet>' "$STAGE/data/oneos_system_floating_feature.xml.tmp"; then
             mv -f "$STAGE/data/oneos_system_floating_feature.xml.tmp" "$STAGE/data/oneos_system_floating_feature.xml"
             chown 0:0 "$STAGE/data/oneos_system_floating_feature.xml"; chmod 644 "$STAGE/data/oneos_system_floating_feature.xml"
-            echo "Floating features: the image's /system/etc list with the phone's $(grep -c -E '<SEC_FLOATING_FEATURE_(CAMERA|BIOAUTH)_' "$PFF") camera/biometric lines ($PFF)"
+            echo "Floating features: the image's /system/etc list with the phone's $(grep -c -E '<SEC_FLOATING_FEATURE_(CAMERA|BIOAUTH|LCD)_' "$PFF") camera/biometric/LCD lines ($PFF)"
         else
             rm -f "$STAGE/data/oneos_system_floating_feature.xml.tmp"
             echo "!!! Floating features: the image's /system/etc list not rewritten"

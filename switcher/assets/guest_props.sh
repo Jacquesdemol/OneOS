@@ -2130,7 +2130,7 @@ ro.miui.backdrop_sampling_enabled=true"
             "dalvik.vm.boot-dex2oat-threads=2" \
             "dalvik.vm.dex2oat-threads=2" \
             "dalvik.vm.background-dex2oat-threads=1" \
-            "dalvik.vm.dex2oat-Xmx=256m" \
+            "dalvik.vm.dex2oat-Xmx=512m" \
             "dalvik.vm.dex2oat-minidebuginfo=false" \
             "dalvik.vm.dex2oat-cpu-set=$DEX_CPU_SET" \
             "dalvik.vm.background-dex2oat-cpu-set=$DEX_CPU_SET" \
@@ -2371,14 +2371,19 @@ restore-persist)
         function kept(k) { return keep != "" && index(k, keep) == 1 }
         BEGIN {
             while ((getline l < nowf) > 0) {
-                eq = index(l, "="); k = substr(l, 1, eq - 1)
+                eq = index(l, "="); if (eq <= 1) continue
+                k = substr(l, 1, eq - 1)
                 now[k] = substr(l, eq + 1); nowline[l] = 1
             }
-            while ((getline k < blankf) > 0) blank[k] = 1
+            close(nowf)
+            while ((getline k < blankf) > 0) if (k != "") blank[k] = 1
+            close(blankf)
             while ((getline l < snapf) > 0) {
-                eq = index(l, "="); k = substr(l, 1, eq - 1)
+                eq = index(l, "="); if (eq <= 1) continue
+                k = substr(l, 1, eq - 1)
                 snap[k] = 1; snapline[l] = 1
             }
+            close(snapf)
             for (k in now) {
                 if ((k in snap) || (now[k] == "" && (k in blank)) || kept(k)) continue
                 if (mode == "--recover" && !guest(k)) continue

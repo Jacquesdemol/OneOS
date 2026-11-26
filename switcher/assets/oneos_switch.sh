@@ -617,7 +617,7 @@ echo "preflight: display hline done $(date +%T)"
 cut_after "$HLINE" 'CutoutPathParserInfo{displayWidth=' ' '; HDW=$R
 cut_after "$HLINE" 'physicalDisplayWidth=' ' '; HPW=$R
 # 0.5.17: the height One UI runs the panel at (the Nothing power key's position, in the UI activator).
-cut_after "$HLINE" 'CutoutPathParserInfo{displayWidth=' '}'; HDH=${R#*displayHeight=}; HDH=${HDH%% *}
+cut_after "$HLINE" 'CutoutPathParserInfo{displayWidth=' '}'; cut_after "$R" 'displayHeight=' ' '; HDH=$R
 case "$HDH" in ''|*[!0-9]*) HDH='' ;; esac
 # Each panel's camera on the whole panel (the guests in the reports run every
 # panel at its full size; guest_panel_fit.sh for one that does not), one line
@@ -4638,7 +4638,7 @@ echo "Session sampler: every 30 s to $STAGE/diag_series.txt"
 rm -f "$STAGE/heat_cap.active"
 HEAT_CAP=0; [ "${ONEOS_HEAT_CAP:-1}" = 1 ] && HEAT_CAP=1
 GUEST_THERMAL_MAP=0
-[ "${ONEOS_GUEST_THERMAL_MAP:-1}" = 1 ] && grep -q '^  "image": "pixel' "$STAGE/.oneos_stage" 2>/dev/null && GUEST_THERMAL_MAP=1
+[ "${ONEOS_GUEST_THERMAL_MAP:-1}" = 1 ] && grep -qE '^  "image": "(pixel|oneui)' "$STAGE/.oneos_stage" 2>/dev/null && GUEST_THERMAL_MAP=1
 # ColorOS too (0.5.20): Samsung's HAL says SEVERE from 45 C skin, and ColorOS throttles its frames and
 # animations at SEVERE (A36 11-17, charging at 43-45 C: "superrrr laggy"; status NONE live: smooth again).
 [ "${ONEOS_GUEST_THERMAL_MAP:-1}" = 1 ] && [ "$GUEST_OPLUS" = 1 ] && GUEST_THERMAL_MAP=1
@@ -4651,7 +4651,14 @@ if [ $HEAT_CAP = 1 ] || [ $GUEST_THERMAL_MAP = 1 ]; then
     F=$STAGE/heat_cap.log
     CFL=/sys/devices/system/cpu/cpufreq_limit/cpufreq_max_limit
     if [ $HEAT_CAP = 1 ]; then
-        echo \"# \$(date) OneOS heat cap: from 45, 47, 50 C skin every CPU policy at 80, 65, 50% of its top clock (2 C hysteresis); charging with the screen on, from 44, 48 C direct charger 80, 65%\" > \$F
+        echo \"# \$(date) OneOS heat cap: from 45, 47, 50 C skin every CPU policy at 80, 65, 50% of its top clock (2 C hysteresis); charging with the screen on, from 52, 56 C direct charger 80, 65%\" > \$F
+        if [ \"$HOST_LOW_POWER\" = 0 ] && [ -w \$CFL ]; then
+            v=\$(cat \$CFL 2>/dev/null)
+            if [ -n \"\$v\" ] && [ \"\$v\" != -1 ]; then
+                echo -1 > \$CFL 2>/dev/null && echo \"\$v\" > $STAGE/cpufreq_max_limit.released
+                echo \"\$(date +%T) startup: released host cpufreq_max_limit=\$v->\$(cat \$CFL 2>/dev/null)\" >> \$F
+            fi
+        fi
     else
         echo \"# \$(date) OneOS heat cap off (Cool down when hot): the guest thermal status only\" > \$F
     fi
@@ -4704,7 +4711,7 @@ if [ $HEAT_CAP = 1 ] || [ $GUEST_THERMAL_MAP = 1 ]; then
                 case \"\$dt\" in ''|*[!0-9]*) dt=0 ;; esac
                 on=0
                 for b in /sys/class/backlight/*/brightness; do v=\$(cat \$b 2>/dev/null); case \"\$v\" in ''|0|*[!0-9]*) ;; *) on=1 ;; esac; done
-                [ \$on = 1 ] && [ \$dt -gt 0 ] && ch=\$(awk -v d=\$dt -v l=\$chl 'BEGIN { t[1] = 440; t[2] = 480; while (l < 2 && d >= t[l + 1]) l++; while (l > 0 && d < t[l] - 20) l--; print l }')
+                [ \$on = 1 ] && [ \$dt -gt 0 ] && ch=\$(awk -v d=\$dt -v l=\$chl 'BEGIN { t[1] = 520; t[2] = 560; while (l < 2 && d >= t[l + 1]) l++; while (l > 0 && d < t[l] - 20) l--; print l }')
             fi
             chl=\$ch
             [ \$ch -gt \$new ] && new=\$ch && sk=\"\$sk (charging, direct charger \$((dt / 10)))\"
@@ -4787,7 +4794,7 @@ if [ "$GUEST_OPLUS" != 1 ] && [ "${ONEOS_GUEST_SF_PIN:-1}" != 0 ] && [ -r /sys/c
     echo \$\$ > /sys/fs/cgroup/cgroup.procs 2>/dev/null
     F=$STAGE/panel_keeper.log
     echo \"# \$(date) OneOS panel keeper: every 15 s; under 48 Hz, or 20+ Hz under the guest's active mode, twice with the screen on: oneos_sf_kick.sh\" > \$F
-    low=0; mis=0; kicks=0
+    low=0; mis=0; kicks=0; ticks=0
     while true; do
         if [ -f $STAGE/data/oneos_rec_stop ] || [ ! -s $STAGE/guest_mntns ]; then
             echo \"# \$(date +%T) stopped (the return started, or no guest namespace record) after \$kicks kicks\" >> \$F
@@ -4812,7 +4819,7 @@ if [ "$GUEST_OPLUS" != 1 ] && [ "${ONEOS_GUEST_SF_PIN:-1}" != 0 ] && [ -r /sys/c
             case \"\$sf\" in ''|*[!0-9]*) sf=0 ;; esac
         fi
         if [ \$sf -ge \$((hz + 20)) ]; then mis=\$((mis + 1)); else mis=0; fi
-        if { [ \$low -ge 2 ] || [ \$mis -ge 2 ]; } && [ \$kicks -lt 40 ] && [ -f $STAGE/data/oneos_sf_kick.sh ]; then
+        if { [ \$low -ge 2 ] || { [ \$kicks = 0 ] && [ \$low -ge 1 ]; } || [ \$mis -ge 2 ]; } && [ \$kicks -lt 40 ] && [ -f $STAGE/data/oneos_sf_kick.sh ]; then
             P=\$(pidof system_server | awk '{print \$1}')
             [ -n \"\$P\" ] || P=\$(pidof surfaceflinger | awk '{print \$1}')
             out=''
@@ -4821,7 +4828,8 @@ if [ "$GUEST_OPLUS" != 1 ] && [ "${ONEOS_GUEST_SF_PIN:-1}" != 0 ] && [ -r /sys/c
             sleep 1
             echo \"\$(date +%T) panel at \$hz Hz (guest mode \$sf Hz) with the screen on: \${out:-no guest system_server/surfaceflinger}; now \$(cut -d' ' -f1 /sys/class/lcd/panel/vrr 2>/dev/null) Hz\" >> \$F
         fi
-        sleep 15
+        ticks=\$((ticks + 1))
+        if [ \$kicks = 0 ] && [ \$ticks -le 10 ]; then sleep 4; else sleep 15; fi
     done
 " </dev/null >/dev/null 2>&1 &
     echo "Panel keeper: on (every 15 s to $STAGE/panel_keeper.log)"

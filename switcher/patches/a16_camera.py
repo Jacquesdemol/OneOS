@@ -17,6 +17,7 @@ cameraserver answered every getCameraCharacteristics with a NullPointerException
 Usage: [ONEOS_A16_CAMERA_HOST=oneui85] ONEOS_CAMERA_ORIG_DECODED=<dir> a16_camera.py <decoded jar dir>
 """
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -28,6 +29,18 @@ CLASSES = [
     "android/hardware/camera2/ICameraDeviceUser$Stub$Proxy.smali", "android/hardware/camera2/ICameraDeviceUser$Stub.smali",
     "android/hardware/camera2/ICameraDeviceCallbacks$Stub$Proxy.smali", "android/hardware/camera2/ICameraDeviceCallbacks$Stub.smali",
 ]
+CAPTURE_RESULT_EXTRAS = "android/hardware/camera2/impl/CaptureResultExtras.smali"
+MULTI_RES_READ_RE = re.compile(
+    r'([ \t]*)sget-object ([vp]\d+), Landroid/hardware/camera2/impl/MultiResConcurrentReadersStartInfo;->CREATOR:Landroid/os/Parcelable\$Creator;\s+'
+    r'(?:\.line \d+\s+)?'
+    r'invoke-virtual \{[vp]\d+, \2\}, Landroid/os/Parcel;->createTypedArray\(Landroid/os/Parcelable\$Creator;\)\[Ljava/lang/Object;\s+'
+    r'(?:\.line \d+\s+)?'
+    r'move-result-object ([vp]\d+)\s+'
+    r'(?:\.line \d+\s+)?'
+    r'check-cast \3, \[Landroid/hardware/camera2/impl/MultiResConcurrentReadersStartInfo;\s+'
+    r'(?:\.line \d+\s+)?'
+    r'iput-object \3, p0, Landroid/hardware/camera2/impl/CaptureResultExtras;->multiResConcurrentReadersStartInfo:\[Landroid/hardware/camera2/impl/MultiResConcurrentReadersStartInfo;'
+)
 
 
 def where(root, cls):
@@ -35,6 +48,37 @@ def where(root, cls):
     if len(hits) != 1:
         sys.exit(f"a16_camera: {cls} found {len(hits)} times under {root}")
     return hits[0]
+
+
+def patch_capture_result_extras(root, orig):
+    if not any(os.path.isfile(os.path.join(root, d, CAPTURE_RESULT_EXTRAS)) for d in os.listdir(root) if d.startswith("smali")):
+        return None
+    d, o = where(root, CAPTURE_RESULT_EXTRAS), where(orig, CAPTURE_RESULT_EXTRAS)
+    if d != o:
+        sys.exit(f"a16_camera: {CAPTURE_RESULT_EXTRAS} in {d} here, {o} in the image")
+    dst = os.path.join(root, d, CAPTURE_RESULT_EXTRAS)
+    shutil.copyfile(os.path.join(orig, o, CAPTURE_RESULT_EXTRAS), dst)
+    with open(dst, "r", encoding="utf-8") as fh:
+        text = fh.read()
+    if "multiResConcurrentReadersStartInfo" not in text:
+        return None
+    m_method = re.search(r'(\.method [^\n]*\breadFromParcel\(Landroid/os/Parcel;\)V\n.*?\n\.end method)', text, re.S)
+    if not m_method:
+        sys.exit("a16_camera: CaptureResultExtras.readFromParcel(Parcel) not found")
+    body = m_method.group(1)
+    patched_body, n = MULTI_RES_READ_RE.subn(
+        r'\1# OneOS: One UI 8/8.5 cameraserver (Android 16) does not write MultiResConcurrentReadersStartInfo[].\n'
+        r'\1const/4 \2, 0x0\n\n'
+        r'\1iput-object \2, p0, Landroid/hardware/camera2/impl/CaptureResultExtras;->multiResConcurrentReadersStartInfo:[Landroid/hardware/camera2/impl/MultiResConcurrentReadersStartInfo;',
+        body,
+    )
+    if n != 1:
+        sys.exit(f"a16_camera: unexpected MultiResConcurrentReadersStartInfo pattern count ({n}) in CaptureResultExtras.readFromParcel")
+    text = text[:m_method.start(1)] + patched_body + text[m_method.end(1):]
+    with open(dst, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    print("a16_camera: skipped Android 17 MultiResConcurrentReadersStartInfo read in CaptureResultExtras.readFromParcel", file=sys.stderr)
+    return d
 
 
 def main(root):
@@ -48,6 +92,9 @@ def main(root):
             sys.exit(f"a16_camera: {cls} in {d} here, {o} in the image")
         shutil.copyfile(os.path.join(orig, o, cls), os.path.join(root, d, cls))
         dirs.add(d)
+    cre_dir = patch_capture_result_extras(root, orig)
+    if cre_dir:
+        dirs.add(cre_dir)
     host = os.environ.get("ONEOS_A16_CAMERA_HOST", "oneui8")
     if host not in ("oneui8", "oneui85"):
         sys.exit(f"a16_camera: ONEOS_A16_CAMERA_HOST={host} (oneui8 or oneui85)")

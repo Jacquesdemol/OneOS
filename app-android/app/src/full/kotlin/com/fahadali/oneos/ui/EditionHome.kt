@@ -262,7 +262,6 @@ class StatusHomeFragment : Fragment(R.layout.home_content) {
         super.onResume()
         // Back from Settings (screen lock removed?), from the root app, or a new open: read again.
         Readiness.onResume(requireContext())
-        AppUpdater.check(requireContext())
         redraw()
     }
 

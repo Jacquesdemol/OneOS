@@ -276,7 +276,6 @@ class SystemsFragment : Fragment() {
     override fun onResume() {
         super.onResume()
         Readiness.onResume(requireContext())
-        com.fahadali.oneos.session.AppUpdater.check(requireContext())
         if (navigatingAway) {
             // Keep the mapped source attached until the 280 ms shared return finishes.
             view?.postDelayed({

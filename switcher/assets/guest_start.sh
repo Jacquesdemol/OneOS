@@ -1598,27 +1598,43 @@ if [ -f /data/guest_audio.flag ]; then
         # 0.5.45 / 0.5.46-antigravity: disabling the Google app DSP hotword stops both Exynos VTS HAL
         # crashes (vts_load_sound_model) and Qualcomm PAL/ADSP PD crash loops (msm/adsp/audio_pd
         # crashing inside SoundTriggerEngineGsl: ProcessStartRecognition while audioserver stays alive).
+        # Note: No apostrophes anywhere in this block (inside single-quoted sh -c).
+        block_hw() {
+            for pkg in "$@"; do
+                [ -n "$pkg" ] || continue
+                o=$(/system/bin/sh /data/oneos_genv.sh /system/bin/cmd appops set "$pkg" RECORD_AUDIO_HOTWORD deny 2>&1) ||
+                    o=$(/system/bin/sh /data/oneos_genv.sh /system/bin/cmd appops set "$pkg" RECORD_AUDIO_HOTWORD ignore 2>&1)
+                /system/bin/sh /data/oneos_genv.sh /system/bin/am force-stop "$pkg" >/dev/null 2>&1
+                echo "$pkg(${o:-ok})"
+            done | tr "\n" " " | cut -c1-160
+        }
+        last_hw=0
+        hw_cnt=0
         hotword_off() {
-            [ ! -f /data/oneos_hotword_off.log ] || return 1
+            [ $hw_cnt -lt 5 ] || return 1
+            now_hw=$(date +%s)
+            [ $((now_hw - last_hw)) -ge 20 ] || return 1
             why_hw=""
+            t=""
             if [ "${1:-all}" = all ] && logcat -d -b crash -t 100 2>/dev/null | grep -q "(vts_load_sound_model+"; then
                 why_hw="vts_load_sound_model"
             else
-                t=$(logcat -d -b main -t 250 -s "PAL: SoundTriggerEngineGsl:E" "PAL: StreamSoundTrigger:I" "PAL: SndMonitor:I" "COSR:I" "*:S" 2>/dev/null)
+                t=$(logcat -d -b main -t 300 -s "PAL:I" "COSR:I" "SoundTriggerMiddlewareLogging:I" "*:S" 2>/dev/null)
                 if echo "$t" | grep -q "SoundTriggerEngineGsl:.*Failed to start" ||
-                   { echo "$t" | grep -q "StreamSoundTrigger:.*LoadSoundModel" && echo "$t" | grep -q -E "ar_osal_pd_notifier_cb.*state.0..*msm/adsp/audio_pd|SndMonitor:.*card status 0"; }; then
+                   { echo "$t" | grep -q -E "StreamSoundTrigger:.*LoadSoundModel|SessionAlsaPcm:.*pcm_(start|write) failed" &&
+                     echo "$t" | grep -q -E "ar_osal_pd_notifier_cb.*state.0..*msm/adsp/audio_pd|SndMonitor:.*card status 0"; }; then
                     why_hw="qti_adsp_soundtrigger"
                 fi
             fi
             [ -n "$why_hw" ] || return 1
-            g=com.google.android.googlequicksearchbox
-            o=$(/system/bin/sh /data/oneos_genv.sh /system/bin/cmd appops set $g RECORD_AUDIO_HOTWORD ignore 2>&1 | tr -s " \n" " " | head -c 80)
-            /system/bin/sh /data/oneos_genv.sh /system/bin/am force-stop $g >/dev/null 2>&1
-            for hw in com.android.hotwordenrollment.okgoogle com.android.hotwordenrollment.xgoogle; do
-                /system/bin/sh /data/oneos_genv.sh /system/bin/cmd appops set $hw RECORD_AUDIO_HOTWORD ignore >/dev/null 2>&1
-                /system/bin/sh /data/oneos_genv.sh /system/bin/am force-stop $hw >/dev/null 2>&1
-            done
-            echo "$(date +%T) audio HAL hit sound trigger failure ($why_hw): Hey Google DSP hotword off for $g ($o)" | tee /data/oneos_hotword_off.log
+            last_hw=$now_hw
+            hw_cnt=$((hw_cnt + 1))
+            extras=""
+            if [ -n "$t" ]; then
+                extras=$(echo "$t" | sed -n "s/.*ATTACH \[client= \"\([A-Za-z0-9_.]*[A-Za-z_]\)[0-9]*\(trusted\)\{0,1\}\".*/\1/p" | grep -vxE "null|com\.google\.android\.googlequicksearchbox|com\.android\.hotwordenrollment\.(ok|x)google" | sort -u | tr "\n" " ")
+            fi
+            res=$(block_hw com.google.android.googlequicksearchbox com.android.hotwordenrollment.okgoogle com.android.hotwordenrollment.xgoogle $extras)
+            echo "$(date +%T) audio HAL hit sound trigger failure ($why_hw): DSP hotword off [$res]" | tee -a /data/oneos_hotword_off.log
             return 0
         }
         # Keep it the one servicemanager hands out (host init can bring
@@ -1641,10 +1657,10 @@ if [ -f /data/guest_audio.flag ]; then
             elif [ "$(owner)" != "$as" ]; then why="media.audio_policy taken"
             else
                 miss=0
-                if [ ! -f /data/oneos_hotword_off.log ] && [ ! -f /data/oneos_hotword_preblocked ]; then
+                if [ "${ONEOS_GUEST_AUDIO_SSR_GUARD:-1}" = 1 ]; then
                     hwt=$(( (hwt + 1) % 5 ))
                     if [ $hwt = 0 ] && hotword_off qti; then
-                        sleep 2
+                        sleep 1
                         kill -9 $as 2>/dev/null
                         restart_hal
                         ([ -f /data/oneos_audio_rt ] && ulimit -r 99 2>/dev/null; exec /system/bin/audioserver) > /dev/null 2>&1 & as=$!
@@ -4021,11 +4037,17 @@ if [ "${ONEOS_GUEST_PREVENT_HOTWORD:-1}" = 1 ] || [ "${ONEOS_DEFER_BG_DEXOPT:-1}
                service check appops 2>/dev/null | grep -q ": found"; then
                 if [ "$prev_hw" = 1 ]; then
                     if [ "$(getprop ro.soc.manufacturer)" = QTI ] || [ "$force_hw" = 1 ]; then
-                        for hw in com.google.android.googlequicksearchbox com.android.hotwordenrollment.okgoogle com.android.hotwordenrollment.xgoogle; do
-                            /system/bin/sh /data/oneos_genv.sh /system/bin/cmd appops set "$hw" RECORD_AUDIO_HOTWORD ignore >/dev/null 2>&1 || true
-                        done
+                        apply_hw_preblock() {
+                            for hw in com.google.android.googlequicksearchbox com.android.hotwordenrollment.okgoogle com.android.hotwordenrollment.xgoogle; do
+                                out=$(/system/bin/sh /data/oneos_genv.sh /system/bin/cmd appops set "$hw" RECORD_AUDIO_HOTWORD deny 2>&1) ||
+                                    out=$(/system/bin/sh /data/oneos_genv.sh /system/bin/cmd appops set "$hw" RECORD_AUDIO_HOTWORD ignore 2>&1 || true)
+                                echo "$(date +%T) preblock $hw: ${out:-ok}" >> /data/oneos_hotword_preblock.log
+                            done
+                        }
+                        apply_hw_preblock
                         : > /data/oneos_hotword_preblocked
-                        echo "$(date +%T) Preventive hotword block applied for QTI SoundTrigger/ADSP stability" >> /data/oneos_hotword_preblock.log
+                        # Re-apply once more after 20s in case user-0 unlock or PM restores default AppOps
+                        ( sleep 20; apply_hw_preblock ) &
                     fi
                 fi
                 if [ "$defer_dex" = 1 ]; then

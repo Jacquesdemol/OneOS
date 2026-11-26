@@ -83,10 +83,12 @@ object AppUpdater : BackgroundJob<AppUpdater.State>(State(), "oneos-update") {
         StageCheck.state.busy || PrepareJob.state.busy || LaunchJob.state.busy || LogJob.state.busy ||
             OldStagesJob.state.busy || RemoveJob.state.busy
 
-    /** Reads update.json unless it was read in the last hours ([force]: now). */
+    /** Reads update.json only when explicitly requested ([force]) or via the debug test channel. */
     fun check(ctx: Context, force: Boolean = false) {
         if (state.busy) return
         val app = ctx.applicationContext
+        val testUrl = AppUpdate.testUrl(testCode(app))
+        if (!force && testUrl == null) return
         val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val now = System.currentTimeMillis()
         if (!force && state.phase != Phase.IDLE && now - prefs.getLong("checked", 0) < CHECK_EVERY_MS) return
