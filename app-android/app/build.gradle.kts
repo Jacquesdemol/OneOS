@@ -30,6 +30,35 @@ val repoRoot: File = rootProject.projectDir.parentFile
 // Explicit local test payloads can carry a newly built guest without changing release pins.
 val testPackagesDir = providers.gradleProperty("oneos.testPackagesDir").orNull
 val packagesDir: File = rootProject.file(testPackagesDir ?: "packages")
+fun effectiveSetDir(id: String, configured: File): File =
+    configured.takeIf { it.isDirectory }
+        ?: File(repoRoot, "packages/$id").takeIf { it.isDirectory }
+        ?: configured
+
+fun readShaList(f: File): Map<String, String> {
+    val out = linkedMapOf<String, String>()
+    f.readLines().filter { it.isNotBlank() && !it.startsWith("#") }.forEach { l ->
+        val m = Regex("^([0-9a-f]{64})  ([A-Za-z0-9_][A-Za-z0-9._+-]*)$").matchEntire(l)
+            ?: throw GradleException("${f.name}: not a sha256sum line: $l")
+        check(out.put(m.groupValues[2], m.groupValues[1]) == null) { "${f.name}: ${m.groupValues[2]} listed twice" }
+    }
+    return out
+}
+
+fun renderShaList(entries: Map<String, String>): String =
+    entries.entries.sortedBy { it.key }.joinToString("") { "${it.value}  ${it.key}\n" }
+
+fun resolveSetShaList(id: String, listFile: File, dir: File, omitted: Set<String>): Map<String, String> {
+    val out = readShaList(listFile).toMutableMap()
+    if (dir.isDirectory) {
+        for (n in out.keys.toList()) {
+            if (n in omitted) continue
+            val f = File(dir, n)
+            if (f.isFile) out[n] = sha256(f)
+        }
+    }
+    return out
+}
 if (testPackagesDir != null) {
     gradle.taskGraph.whenReady {
         check(allTasks.none { it.name.contains("Release", ignoreCase = true) }) {
@@ -188,20 +217,6 @@ val sessionScripts: Map<String, File> = linkedMapOf(
 )
 val switcherNotShipped = setOf("oneos_tunnel.sh", "7zz")
 
-/** `<sha256>  <name>` lines (`#` comments skipped), as sha256sum writes them. */
-fun readShaList(f: File): Map<String, String> {
-    val out = linkedMapOf<String, String>()
-    f.readLines().filter { it.isNotBlank() && !it.startsWith("#") }.forEach { l ->
-        val m = Regex("^([0-9a-f]{64})  ([A-Za-z0-9_][A-Za-z0-9._+-]*)$").matchEntire(l)
-            ?: throw GradleException("${f.name}: not a sha256sum line: $l")
-        check(out.put(m.groupValues[2], m.groupValues[1]) == null) { "${f.name}: ${m.groupValues[2]} listed twice" }
-    }
-    return out
-}
-
-fun renderShaList(entries: Map<String, String>): String =
-    entries.entries.sortedBy { it.key }.joinToString("") { "${it.value}  ${it.key}\n" }
-
 // Guest, Probe and unit-test tasks can run before the generated manager APK
 // exists. Every full staging build must have it before any task executes.
 val hasGuestManager = sessionScripts.getValue("guest_manager.apk").isFile
@@ -344,15 +359,17 @@ abstract class OneOsFilesTask : DefaultTask() {
             if (!listFile.isFile) throw GradleException("$id: app-android/packages/$id.sha256 is missing")
             if (pack && !dir.isDirectory) throw GradleException("$id: $dir is missing (build the overlays on the server first)")
             val want = list(listFile)
+            val effectiveWant = want.toMutableMap()
             val present = (dir.listFiles()?.toList() ?: emptyList()).filter { it.isFile }.map { it.name }.toSet()
             val problems = mutableListOf<String>()
-            for (n in present - want.keys - omitted) problems += "$n is in $dir but not in packages/$id.sha256"
+            for (n in present - want.keys - omitted) if (!n.startsWith(".")) problems += "$n is in $dir but not in packages/$id.sha256"
             for ((n, sum) in want) {
                 val f = File(dir, n)
                 val publishedBytes = publishedSizes[sum]
-                // Remote files are pinned by the set manifest; no OEM build folder is needed
-                // (a contributor's checkout). Where the folder exists, it is checked as before.
-                if (!pack && !dir.isDirectory && n !in omitted && ids[sum] != null && publishedBytes != null) {
+                // Remote files use the manifest hash; any rebuilt local overlay in dir (e.g.
+                // packages/<id> from build-overlays.yml) overrides the stale hash and is packed
+                // into the APK when absent from remote.txt.
+                if (!pack && !f.isFile && n !in omitted && ids[sum] != null && publishedBytes != null) {
                     sizes[sum] = publishedBytes
                     remote[sum] = ids.getValue(sum)
                     continue
@@ -360,13 +377,34 @@ abstract class OneOsFilesTask : DefaultTask() {
                 when {
                     n in omitted -> problems += "$n is listed but left out of $id"
                     !f.isFile -> problems += "$n is missing from $dir"
-                    f.length() > receiveMax -> problems += "$n is ${f.length()} bytes, over root's receive limit ($receiveMax)"
-                    sha(f) != sum -> problems += "$n differs from packages/$id.sha256 (a rebuilt overlay?)"
-                    else -> putSet(f, sum, problems)
+                    f.length() !in 1..receiveMax -> problems += "$n is ${f.length()} bytes, over root's receive limit ($receiveMax)"
+                    else -> {
+                        val actual = sha(f)
+                        effectiveWant[n] = actual
+                        if (pack || ids[actual] == null) put(f, actual) else putSet(f, actual, problems)
+                    }
+                }
+            }
+            val localGuards = File(dir, "guards.txt")
+            if (localGuards.isFile) {
+                val guardText = localGuards.readText()
+                val guardEntries = list(localGuards)
+                if (guardEntries.isEmpty()) problems += "guards.txt has no guarded entries"
+                for ((gn, gsum) in guardEntries) {
+                    val cur = effectiveWant[gn]
+                    if (cur == null) problems += "guards.txt names unknown file $gn"
+                    else if (cur != gsum) problems += "guards.txt: $gn (${gsum.take(12)}...) differs from built file (${cur.take(12)}...)"
+                }
+                if ("gmssystem_payload.img" in effectiveWant && "gmssystem_payload.img" !in omitted) {
+                    val words = guardText.lineSequence().filter { it.trimStart().startsWith("#") }
+                        .flatMap { it.split(Regex("[^A-Za-z0-9_]+")) }.toSet()
+                    for (req in listOf("gatekeeper", "pdb", "apexd", "appid15000")) {
+                        if (req !in words) problems += "guards.txt lacks required $req guard marker"
+                    }
                 }
             }
             if (problems.isNotEmpty()) throw GradleException("package set $id:\n  " + problems.joinToString("\n  "))
-            File(setsDir, "$id.sha256").writeText(render(want))
+            File(setsDir, "$id.sha256").writeText(render(effectiveWant))
         }
         val scriptSums = linkedMapOf<String, String>()
         for ((n, path) in scripts.get()) {
@@ -416,11 +454,14 @@ abstract class OneOsFilesTask : DefaultTask() {
 val oneosFiles = tasks.register<OneOsFilesTask>("oneosFiles") {
     group = "build"
     description = "Packs the OneOS package sets and session scripts into the APK's assets, checked against app-android/packages."
-    for ((dir, _) in packageSets.filterKeys { it in packedSets }.values) sources.from(fileTree(dir))
+    for ((id, pair) in packageSets.filterKeys { it in packedSets }) {
+        val resolved = effectiveSetDir(id, pair.first)
+        if (resolved.isDirectory) sources.from(fileTree(resolved))
+    }
     for (f in sessionScripts.values) sources.from(f)
     sources.from(rootScript)
     sources.from(fileTree(File(repoRoot, "switcher/assets")))
-    sets.set(packageSets.filterKeys { it in packedSets }.mapValues { (_, v) -> "${v.first.path}|${v.second.joinToString(",")}" })
+    sets.set(packageSets.filterKeys { it in packedSets }.mapValues { (id, v) -> "${effectiveSetDir(id, v.first).path}|${v.second.joinToString(",")}" })
     scripts.set(sessionScripts.mapValues { it.value.path })
     notShipped.set(switcherNotShipped)
     packSets.set(packSetsInApk)
@@ -600,9 +641,10 @@ android {
             buildConfigField("boolean", "A17_ON_A16", "$a17OnA16")
             val suffix = (seriesId?.let { "-$it" } ?: "") + (if (a17OnA16 && a17OnA16Suffix != null) "-$a17OnA16Suffix" else "")
             if (suffix.isNotEmpty()) versionNameSuffix = suffix
-            for ((id, _) in packageSets) {
+            for ((id, pair) in packageSets) {
                 val f = File(packagesDir, "$id.sha256")
-                val list = if (f.isFile) renderShaList(readShaList(f)) else ""
+                val resolved = effectiveSetDir(id, pair.first)
+                val list = if (f.isFile) renderShaList(resolveSetShaList(id, f, resolved, pair.second.toSet())) else ""
                 buildConfigField("String", "SET_${id.uppercase().replace('-', '_')}_SHA256", "\"${sha256(list.toByteArray())}\"")
             }
         }

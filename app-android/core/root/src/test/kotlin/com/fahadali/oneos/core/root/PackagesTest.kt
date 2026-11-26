@@ -16,6 +16,23 @@ import java.io.File
  */
 class PackagesTest {
     private val dir = File(System.getProperty("oneos.packagesDir") ?: "../../packages")
+    private val repoRoot = File(Shipped.switcherAssets, "../..")
+
+    private fun localOverlayDir(s: com.fahadali.oneos.core.model.PackageSet): File? =
+        File(repoRoot, s.sourceDir).takeIf { it.isDirectory }
+            ?: File(repoRoot, "packages/${s.id}").takeIf { it.isDirectory }
+
+    private fun effectiveShaList(s: com.fahadali.oneos.core.model.PackageSet): String {
+        val base = File(dir, "${s.id}.sha256").readText()
+        val local = localOverlayDir(s) ?: return base
+        val entries = ShaList.parse(base).entries.toMutableMap()
+        for (n in entries.keys.toList()) {
+            if (n in s.omitted) continue
+            val f = File(local, n)
+            if (f.isFile) entries[n] = Hashes.sha256(f.readBytes())
+        }
+        return ShaList.render(entries)
+    }
 
     @Test
     fun listsNameExactlyTheSets() {
@@ -28,9 +45,9 @@ class PackagesTest {
     @Test
     fun guardsMatchTheirJars() {
         for (s in PackageSets.ALL) {
-            val list = File(dir, "${s.id}.sha256").readText()
-            val guards = File(dir, "${s.id}.guards.txt")
-            // The checked-in guards.txt is the set's own file (same hash as in its list).
+            val list = effectiveShaList(s)
+            val localGuards = localOverlayDir(s)?.let { File(it, "guards.txt") }?.takeIf { it.isFile }
+            val guards = localGuards ?: File(dir, "${s.id}.guards.txt")
             assertEquals(s.id, ShaList.parse(list).entries["guards.txt"], Hashes.sha256(guards.readBytes()))
             assertEquals(s.id, emptyList<String>(), s.checkGuards(guards.readText(), list))
         }
