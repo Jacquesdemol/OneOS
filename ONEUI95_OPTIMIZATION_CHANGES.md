@@ -95,3 +95,34 @@ Consequently, failure inside the OneOS guest is **not** caused by an unlocked bo
    - `guest_props.sh:2089-2102` overrides `ro.product.*.model` / `ro.boot.em.model` to `SM-S948B` (One UI 9.5) for Galaxy Store compatibility while the host TEE/AVB attests `SM-S908E` (`b0q`, `S908EXXSEGZH4`), creating a potential metadata mismatch for GMS server-side validation.
 
 **Revised Verdict:** `MEETS_DEVICE_INTEGRITY` and `MEETS_STRONG_INTEGRITY` are **architecturally possible in principle using your phone's genuine hardware TEE (without external leaked keyboxes)**, **if** future work resolves: (1) the `keystore2` `HARDWARE_TYPE_UNAVAILABLE` / Finsky attestation failure inside the guest container, (2) running without exposing `SELinux Permissive`, `KernelSU`, or container mounts to `com.google.android.gms.unstable`, and (3) aligning GMS-visible device model/build props cleanly with the `SM-S908E` hardware certificate.
+
+---
+
+## 5. Round 2 Fixes (`ai.md` — Storage/Cache, Gallery AI, Post-Round-1 Thermal/Stall Audit)
+
+### 5.1. Guest Storage Accounting, Clear Data & Clear Cache (`P0`)
+- **Root Cause:**
+  1. One UI 8 host `installd` accesses `/data_mirror/data_{ce,de}/null/0/<pkg>`, which points to host One UI 8 `dm-58` userdata (`bridges.sh` intentionally does not bridge `data_mirror`), never the guest's `/data/user/0`.
+  2. One UI 9.5 `IInstalld` signatures for `getAppSize` (added `pccAppId`), `getUserSize` (`[I[I`), and `clearAppData` (`IIJJ`) differ from One UI 8 (`host_installd_a16.txt`), so `FetchPackageStorage` failed with `RemoteException: OneOS: installd method 8 is not on this phone's installd`.
+  3. `guest_storage_guards.py` and `guest_installd_abi.py` intentionally drop/block `IInstalld.clearAppData` so host data is never touched, leaving Settings "Limpar dados" and "Limpar cache" non-functional.
+- **Fix:**
+  - Added static aarch64 native helper [`switcher/native/oneos_storaged.c`](file:///data/data/com.termux/files/home/agy/OneOS/switcher/native/oneos_storaged.c) (built into `switcher/assets/oneos_storaged` by [`switcher/native/build.sh`](file:///data/data/com.termux/files/home/agy/OneOS/switcher/native/build.sh)), launched inside the guest mount namespace by [`guest_start.sh`](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/guest_start.sh) on `/data/system/oneos_storage.sock` (`0600`, `1000:1000`). Enforces `SO_PEERCRED` (`cred.uid == 1000`) and `same_root(cred.pid)` + path validation.
+  - Added [`OneOSStorageHelper.java`](file:///data/data/com.termux/files/home/agy/OneOS/switcher/patches/OneOSStorageHelper.java) / [`OneOSStorageHelper.smali`](file:///data/data/com.termux/files/home/agy/OneOS/switcher/patches/OneOSStorageHelper.smali) and [`guest_storage_bridge.py`](file:///data/data/com.termux/files/home/agy/OneOS/switcher/patches/guest_storage_bridge.py) (wired into [`make-overlays.sh`](file:///data/data/com.termux/files/home/agy/OneOS/scripts/make-overlays.sh)):
+    - Intercepts internal-volume `Installer.getAppSize`, `getAppSizeAndFileCount`, `getUserSize`, and `getExternalSize` via `oneos_storaged`.
+    - Keeps global `IInstalld.clearAppData` guards intact while routing Settings Clear Data (`PackageManagerService.clearApplicationUserDataLIF`) and Clear Cache (`PackageManagerService$IPackageManagerImpl$$ExternalSyntheticLambda20`) to `CLEAR_DATA` / `CLEAR_CACHE` in `oneos_storaged` (preserving top-level package directories, `lib` symlink, and `cache`/`code_cache` ownership/mode).
+  - Wired `oneos_storaged` into `guest_prepare.sh`, `return_to_oneui.sh`, `deploy-phone.sh`, `app/build.gradle.kts`, `RootScript.kt`, `StageStatus.kt`, and `oneos_root.sh`.
+
+### 5.2. Samsung Gallery AI / Photo Editor (`P0`)
+- **Root Cause:** `PhotoEditor_AIFull` (`liblvm_utility.samsung.so` -> `libPetDetector_v1.camera.samsung.so`) crashed with `SIGABRT` (`std::out_of_range`) because `/vendor/etc/petdetector/studio_pd/studio_pd_cnn.info` is absent on the One UI 8 host `/vendor`. Host `/vendor/saiv/image_understanding/db/pet_detector/pet_detector_cnn.tflite` (`[1,512,512,3]` float32) already exists on the phone, and guest priv-apps resolve `libsnap_aidl.snap.samsung.so` cleanly.
+- **Fix:** Updated [`guest_prepare.sh`](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/guest_prepare.sh) to provide `/vendor/etc/petdetector/{studio_pd/studio_pd_cnn.info,aic_pet_detector/*.info,config_thresholds.json}` pointing to host `pet_detector_cnn.tflite` via read-only `overlay` or `farm_dir` bind inside `$ROOTFS/vendor/etc` (labeled `vendor_configs_file`), without altering the host `/vendor` partition.
+
+### 5.3. Post-Round-1 Thermal & Log-Loop Audit (`P1`)
+- **Verified Round-1 Wins (`2026-11-27` session logs):** `word_detector_0`, `AudioIn` wakelock, `ISehRealTimeToken/default`, and `FeatureUtil` missing-file log storms are gone.
+- **Additional Safe Fixes Applied:**
+  - Extended [`oneui_sem_undeclared.py`](file:///data/data/com.termux/files/home/agy/OneOS/switcher/patches/oneui_sem_undeclared.py) to auto-discover and guard all 41-style native-reaching wrappers in `SemService` (including 25 previously unguarded methods such as `get_ESEA`, `isLccmSwp`, `check_SeState`, `handle_CCM`, which still produced 480 `ISehSem/default` 1s stalls and 1,455 `ctl.interface_start` errors in `system_server`).
+  - Added safe pruning in [`guest_prepare.sh`](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/guest_prepare.sh) for stale `/data/resource-cache/*.frro` entries in `data/system/overlays.xml` whose `.frro` file does not exist (eliminating 116 broken entries causing >14,000 idmap open errors per session across `system_server`, `settings`, `phone`, and `systemui`).
+- **Remaining Unpatched Sources Found in `2026-11-27` Diagnostics (`~42-45 °C`):**
+  - `com.samsung.drm` (`ISehWidevineKeyProv/default`: 1,724x 1s stalls + 5,188x `ctl.interface_start` errors) and long `DrmBigdataWorker` partial wakelocks (`2m36s` each in `diag_90/power.txt`).
+  - `com.google.android.apps.messaging` (`imgtagdbserver`: 504x 1s stalls + 1,512x `ctl.interface_start` errors) and `WorkQueueWorkerShim` wakelock (`5m24s`).
+  - `SemWifiBpf-JNI` (`2,868` `BpfMapHelper` / `SemWifiBpf-JNI` map-open errors every 1s in `system_server` looking for `map_semUidBPF_tsm_*`).
+  - `QtiSurfaceFlingerExtension` (`9,778` `SET_CORNER_RADIUS` warnings during active UI rendering) + active UI/app workloads (`com.zuan.kernelmanager`, `com.android.settings`, `surfaceflinger`, `system_server`, and `logd` peaking at 75–107% CPU under active log spam).

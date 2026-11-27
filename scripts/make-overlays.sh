@@ -347,6 +347,8 @@ case "$IMAGE_SDK" in
 esac
 echo "installd: the image is SDK $IMAGE_SDK, host table $(basename "$HOST_INSTALLD")"
 KEY_DIRS="$KEY_DIRS $(python3 -I "$ROOT/switcher/patches/guest_installd_abi.py" "$WORK/services" "$HOST_INSTALLD")"
+# Bridge guest storage size queries and Settings Clear Data / Clear Cache to oneos_storaged inside the guest mount namespace.
+KEY_DIRS="$KEY_DIRS $(python3 -I "$ROOT/switcher/patches/guest_storage_bridge.py" "$WORK/services" "$ROOT/switcher/patches/OneOSStorageHelper.smali")"
 # KnoxGuard 3.0 is never started in a One UI guest (patches/samsung_no_knoxguard30.py): it cannot
 # reach the phone's KnoxGuard TA and locked the guest's screen asking for data to report to
 # Samsung (A36 runs 9, 10). The old KnoxGuard service stays off through MysticGSI's
@@ -1201,6 +1203,7 @@ python3 -I "$ROOT/scripts/check-dex.py" $JARS
 {
     echo "# framework overlays built by scripts/make-overlays.sh with the storage, installd, power, sysrq, weaver, biometric, gatekeeper, pdb, apexd, appid15000, nousers, nativeservices, wipesecrets and ksuappid guards, and the secims carve-out (com.sec.imsservice kept in android.uid.system from /system_ext/priv-app/OneOSSecIms only)"
     echo "# installd and IOemNetd codes read on the phone at runtime (OneOSInstalldCodes, OneOSOemNetdCodes): One UI 9.0 and 9.5 phones"
+    echo "# guest storage bridge: OneOSStorageHelper routes Settings app/user/external size and Clear Data/Cache to oneos_storaged (patches/guest_storage_bridge.py)"
     echo "# charger power from Samsung's charging_type in BatteryService (OneOSChargePower)"
     if [ "$BIO_REMOVE" = 1 ]; then
         bio_line="# biometric-remove guard: services_patched.jar never removes a fingerprint or face template (patches/guest_no_biometric_remove.py)"

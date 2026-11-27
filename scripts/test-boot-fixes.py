@@ -114,6 +114,12 @@ def test_sem_featureutil_and_sw_hotword_patchers() -> None:
             ".class public final Lcom/android/server/SemService;\n"
             ".super Ljava/lang/Object;\n"
             "# direct methods\n"
+            ".method private native closeSpi(I)I\n"
+            ".end method\n"
+            ".method private native getESEA([B)I\n"
+            ".end method\n"
+            ".method private native handleCCM([BI)[Ljava/lang/String;\n"
+            ".end method\n"
             ".method private blacklist requestSpiUsage()Z\n"
             "    .locals 2\n"
             "    const/4 v0, 0x1\n"
@@ -125,6 +131,18 @@ def test_sem_featureutil_and_sw_hotword_patchers() -> None:
             "    move-result p0\n"
             "    return p0\n"
             ".end method\n"
+            ".method public blacklist get_ESEA()Ljava/lang/String;\n"
+            "    .locals 1\n"
+            "    invoke-direct {p0, v0}, Lcom/android/server/SemService;->getESEA([B)I\n"
+            "    const/4 v0, 0x0\n"
+            "    return-object v0\n"
+            ".end method\n"
+            ".method public blacklist handle_CCM([BI)[Ljava/lang/String;\n"
+            "    .locals 0\n"
+            "    invoke-direct {p0, p1, p2}, Lcom/android/server/SemService;->handleCCM([BI)[Ljava/lang/String;\n"
+            "    move-result-object v0\n"
+            "    return-object v0\n"
+            ".end method\n"
         )
         r = subprocess.run([sys.executable, str(sem_patch), str(root)], capture_output=True, text=True, check=True)
         assert r.stdout.strip() == "smali_classes6"
@@ -132,6 +150,7 @@ def test_sem_featureutil_and_sw_hotword_patchers() -> None:
         assert "oneosHasSemHal()Z" in sem_txt
         assert "ISehSem/default" in sem_txt
         assert "    .locals 1\n" in sem_txt
+        assert sem_txt.count("invoke-static {}, Lcom/android/server/SemService;->oneosHasSemHal()Z") == 4
         assert subprocess.run([sys.executable, str(sem_patch), str(root)], capture_output=True, text=True, check=True).stdout.strip() == ""
 
         fu = root / "smali_classes6/com/samsung/android/feature/FeatureUtil.smali"
@@ -305,12 +324,90 @@ def test_wired_fixes() -> None:
     assert "oneui_sem_undeclared.py" in (ROOT / "scripts/patch-framework-camera.sh").read_text()
     assert "oneui_featureutil_missing_file.py" in (ROOT / "scripts/patch-framework-camera.sh").read_text()
     assert "placeholder /data/system/Kumiho/Kumiho.policy created" in gp
+    assert "guest_storage_bridge.py" in (ROOT / "scripts/make-overlays.sh").read_text()
+    assert "oneos_storaged" in gp
+    assert "studio_pd_cnn.info" in gp
+    assert "pet_detector_cnn.tflite" in gp
+    assert "__ONEOS_RC_END__" in gp
+    assert "/data/oneos_storaged --daemon" in gs
+    assert "/data/oneos_storaged" in (ROOT / "switcher/assets/return_to_oneui.sh").read_text()
+    for pkg_ref in (
+        "scripts/deploy-phone.sh",
+        "app-android/app/build.gradle.kts",
+        "app-android/core/root/src/main/kotlin/com/fahadali/oneos/core/root/RootScript.kt",
+        "app-android/core/root/src/main/kotlin/com/fahadali/oneos/core/root/StageStatus.kt",
+        "app-android/app/src/full/assets/root/oneos_root.sh",
+    ):
+        assert "oneos_storaged" in (ROOT / pkg_ref).read_text(), pkg_ref
+
+
+def test_storage_bridge_patcher() -> None:
+    bridge = ROOT / "switcher/patches/guest_storage_bridge.py"
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        pm = root / "smali_classes2/com/android/server/pm"
+        pm.mkdir(parents=True, exist_ok=True)
+        inst = pm / "Installer.smali"
+        inst.write_text(
+            ".class public Lcom/android/server/pm/Installer;\n"
+            ".method public final getAppSize(Ljava/lang/String;[Ljava/lang/String;IIII[J[Ljava/lang/String;Landroid/content/pm/PackageStats;)V\n"
+            "    .locals 20\n"
+            "    invoke-virtual {v0}, Lcom/android/server/pm/Installer;->checkBeforeRemote()V\n"
+            "    return-void\n"
+            ".end method\n"
+            ".method public final getAppSizeAndFileCount(Ljava/lang/String;[Ljava/lang/String;IIII[J[Ljava/lang/String;)[J\n"
+            "    .locals 16\n"
+            "    invoke-virtual {v0}, Lcom/android/server/pm/Installer;->checkBeforeRemote()V\n"
+            "    const/4 v0, 0x0\n"
+            "    return-object v0\n"
+            ".end method\n"
+            ".method public final getUserSize(Ljava/lang/String;II[I[ILandroid/content/pm/PackageStats;)V\n"
+            "    .locals 3\n"
+            "    invoke-virtual {p0}, Lcom/android/server/pm/Installer;->checkBeforeRemote()V\n"
+            "    return-void\n"
+            ".end method\n"
+            ".method public final getExternalSize(Ljava/lang/String;II[I)[J\n"
+            "    .locals 3\n"
+            "    invoke-virtual {p0}, Lcom/android/server/pm/Installer;->checkBeforeRemote()V\n"
+            "    const/4 v0, 0x0\n"
+            "    return-object v0\n"
+            ".end method\n"
+        )
+        pms = pm / "PackageManagerService.smali"
+        pms.write_text(
+            ".class public Lcom/android/server/pm/PackageManagerService;\n"
+            ".method public final clearApplicationUserDataLIF(Ljava/lang/String;Ljava/lang/String;IIZ)Z\n"
+            "    .locals 4\n"
+            "    invoke-virtual {p5, v2, p3, p4}, Lcom/android/server/pm/AppDataHelper;->clearAppDataLIF(Lcom/android/server/pm/pkg/AndroidPackage;II)V\n"
+            "    const/4 v0, 0x1\n"
+            "    return v0\n"
+            ".end method\n"
+        )
+        lam = pm / "PackageManagerService$IPackageManagerImpl$$ExternalSyntheticLambda20.smali"
+        lam.write_text(
+            ".class public Lcom/android/server/pm/PackageManagerService$IPackageManagerImpl$$ExternalSyntheticLambda20;\n"
+            ".method public final run()V\n"
+            "    .locals 8\n"
+            "    const/16 v5, 0x27\n"
+            "    invoke-virtual {v0, v3, v4, v5}, Lcom/android/server/pm/AppDataHelper;->clearAppDataLIF(Lcom/android/server/pm/pkg/AndroidPackage;II)V\n"
+            "    return-void\n"
+            ".end method\n"
+        )
+        r = subprocess.run([sys.executable, str(bridge), str(root)], capture_output=True, text=True, check=True)
+        assert r.stdout.strip() == "smali_classes2"
+        assert (pm / "OneOSStorageHelper.smali").is_file()
+        assert "OneOSStorageHelper;->getAppSize(" in inst.read_text()
+        assert "OneOSStorageHelper;->getUserSize(" in inst.read_text()
+        assert "OneOSStorageHelper;->clearAppData(" in pms.read_text()
+        assert "OneOSStorageHelper;->clearAppCache(" in lam.read_text()
+        assert subprocess.run([sys.executable, str(bridge), str(root)], capture_output=True, text=True, check=True).stdout.strip() == ""
 
 
 def main() -> int:
     tests = [
         test_rtts_patcher,
         test_sem_featureutil_and_sw_hotword_patchers,
+        test_storage_bridge_patcher,
         test_ld_config_awk,
         test_return_ip_rule_norm,
         test_wired_fixes,

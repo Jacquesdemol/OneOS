@@ -264,6 +264,8 @@ pkill -9 -f "ctl.stop zygote" 2>/dev/null || true
 pkill -9 -f "kill -STOP" 2>/dev/null || true
 pkill -9 -f "ui_activator" 2>/dev/null || true
 pkill -9 -f "zygote_exec" 2>/dev/null || true
+pkill -9 -f "/data/oneos_storaged" 2>/dev/null || true
+rm -f "$S/data/oneos_storaged" "$S/data/system/oneos_storage.sock" 2>/dev/null || true
 # Stop the adb watchdog started by oneos_switch.sh before One UI's own
 # system_server comes back, so it cannot fight init over sys.usb.config.
 pkill -9 -f "adb_watchdog.sh" 2>/dev/null || true

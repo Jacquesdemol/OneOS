@@ -11,11 +11,12 @@
 Usage: check-dex.py <jar> [...]   (needs dexdump from the SDK build-tools)
 Exits 1 and lists the methods if anything is found.
 """
-import glob, os, re, subprocess, sys, tempfile, zipfile
+import glob, os, re, shutil, subprocess, sys, tempfile, zipfile
 
-dexdump = sorted(glob.glob(os.path.join(
+hits = sorted(glob.glob(os.path.join(
     os.environ.get("ANDROID_HOME", "/opt/android-sdk"), "build-tools", "*", "dexdump*"
-)))[-1]
+)))
+dexdump = os.environ.get("DEXDUMP") or (hits[-1] if hits else (shutil.which("dexdump") or "/apex/com.android.art/bin/dexdump"))
 bad = []
 for jar in sys.argv[1:]:
     with tempfile.TemporaryDirectory() as tmp, zipfile.ZipFile(jar) as z:

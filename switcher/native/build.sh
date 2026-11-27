@@ -35,6 +35,11 @@ if [ -n "$NDK" ] && [ -x "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" 
     "$STRIP" "$DIR/../assets/oneos_bpf_ringbuf"
     ls -la "$DIR/../assets/oneos_bpf_ringbuf"
 
+    "$CC" --target=aarch64-linux-android29 -static -O2 -Wall -Wextra \
+        -o "$DIR/../assets/oneos_storaged" "$DIR/oneos_storaged.c"
+    "$STRIP" "$DIR/../assets/oneos_storaged"
+    ls -la "$DIR/../assets/oneos_storaged"
+
     # Bluetooth audio bridge (oneos_btaudio.cpp): dynamic, it needs the phone's
     # libbinder_ndk.so; API 31 for AParcel_appendFrom.
     "${CC}++" --target=aarch64-linux-android31 -O2 -Wall -Wextra -std=c++17 -static-libstdc++ \
@@ -42,17 +47,25 @@ if [ -n "$NDK" ] && [ -x "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" 
     "$STRIP" "$DIR/../assets/oneos_btaudio"
     ls -la "$DIR/../assets/oneos_btaudio"
 elif command -v zig >/dev/null 2>&1; then
-    echo "build.sh: NDK not found; building static oneos_bpf_ringbuf with zig cc (aarch64-linux-musl)"
+    echo "build.sh: NDK not found; building static helpers with zig cc (aarch64-linux-musl)"
     zig cc -target aarch64-linux-musl -static -O2 -s -Wall -Wextra \
         "$DIR/oneos_bpf_ringbuf.c" -o "$DIR/../assets/oneos_bpf_ringbuf"
     chmod 0755 "$DIR/../assets/oneos_bpf_ringbuf"
     ls -la "$DIR/../assets/oneos_bpf_ringbuf"
+    zig cc -target aarch64-linux-musl -static -O2 -s -Wall -Wextra \
+        "$DIR/oneos_storaged.c" -o "$DIR/../assets/oneos_storaged"
+    chmod 0755 "$DIR/../assets/oneos_storaged"
+    ls -la "$DIR/../assets/oneos_storaged"
 elif command -v clang >/dev/null 2>&1 && { [ "$(uname -m)" = "aarch64" ] || [ "$(uname -m)" = "arm64" ]; }; then
-    echo "build.sh: NDK not found; building static oneos_bpf_ringbuf with clang -static"
+    echo "build.sh: NDK not found; building static helpers with clang -static"
     clang -static -O2 -s -Wall -Wextra \
         "$DIR/oneos_bpf_ringbuf.c" -o "$DIR/../assets/oneos_bpf_ringbuf"
     chmod 0755 "$DIR/../assets/oneos_bpf_ringbuf"
     ls -la "$DIR/../assets/oneos_bpf_ringbuf"
+    clang -static -O2 -s -Wall -Wextra \
+        "$DIR/oneos_storaged.c" -o "$DIR/../assets/oneos_storaged"
+    chmod 0755 "$DIR/../assets/oneos_storaged"
+    ls -la "$DIR/../assets/oneos_storaged"
 else
     echo "build.sh: neither ANDROID_NDK_HOME nor zig/clang found" >&2
     exit 1

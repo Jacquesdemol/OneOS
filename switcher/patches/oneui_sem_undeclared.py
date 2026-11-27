@@ -10,10 +10,11 @@ which blocks binder threads inside system_server indefinitely and spams init eve
 
 This patcher:
 1. Adds a small static helper SemService.oneosHasSemHal()Z checking
-   ServiceManager.checkService("vendor.samsung.hardware.security.sem.ISehSem/default") != null.
-2. Guards SemService.requestSpiUsage()Z to return false immediately when the HAL is absent.
-3. Guards every non-requestSpiUsage method in SemService that invokes a native method so no
-   path reaches libsec_sem.so when ISehSem/default is unregistered.
+   ServiceManager.checkService("vendor.samsung.hardware.security.sem.ISehSem/default") != null
+   (if not already present).
+2. Auto-discovers every `.method ... native` declaration in SemService.smali and guards
+   all non-native methods that call any of them (plus requestSpiUsage()Z) so no
+   unregistered HAL call can reach libsec_sem.so, upgrading partially patched files safely.
 
 Exits 0 cleanly (printing modified smali top dirs) even on non-OneUI frameworks.
 
@@ -24,6 +25,7 @@ import re
 import sys
 
 HAL_NAME = "vendor.samsung.hardware.security.sem.ISehSem/default"
+HELPER_SIG = "SemService;->oneosHasSemHal()Z"
 MARK = "    # OneOS: guard libsec_sem calls when ISehSem/default is absent (oneui_sem_undeclared.py)"
 
 HELPER_METHOD = (
@@ -43,31 +45,16 @@ HELPER_METHOD = (
 )
 
 GUARD_RETURN_BY_TYPE = {
-    "Z": ("const/4 v0, 0x0", "return v0"),
-    "I": ("const/16 v0, -0xa", "return v0"),
-    "B": ("const/4 v0, -0x1", "return v0"),
-    "Ljava/lang/String;": ("const/4 v0, 0x0", "return-object v0"),
-    "V": (None, "return-void"),
+    "Z": ("const/4 v0, 0x0", "return v0", 1),
+    "I": ("const/16 v0, -0xa", "return v0", 1),
+    "B": ("const/4 v0, -0x1", "return v0", 1),
+    "J": ("const-wide/16 v0, 0x0", "return-wide v0", 2),
+    "V": (None, "return-void", 1),
 }
 
-UNGUARDED_NATIVE_CALLERS = {
-    "closeNormalSpiAfterTimerFailure()Z",
-    "encData(Ljava/lang/String;)Ljava/lang/String;",
-    "ICD()I",
-    "agent_SLOG(Ljava/lang/String;)V",
-    "close_Spi(I)I",
-    "dump(Ljava/io/FileDescriptor;Ljava/io/PrintWriter;[Ljava/lang/String;)V",
-    "getAtr_Spi()I",
-    "grdm_Check_Status()I",
-    "grdm_check_restricted_mode()Ljava/lang/String;",
-    "grdm_get_attes_cert(I[B)I",
-    "grdm_get_session()I",
-    "grdm_release_session()I",
-    "grdm_request_key(I[B)I",
-    "resetForCOSU()I",
-    "send_Data([BI[BI)I",
-    "start_SLOG()V",
-    "stop_request_credentials()V",
+NATIVE_CALL_RE = re.compile(r"Lcom/android/server/SemService;->([A-Za-z0-9_$]+\([^)]*\)\S+)")
+
+KNOWN_NATIVE_WRAPPERS = {
     "synchronizedCloseSpi(I)I",
 }
 
@@ -77,39 +64,62 @@ def _method_sig(header: str) -> str:
     return m.group(1) if m else ""
 
 
+def _guard_return(ret_type: str):
+    if ret_type in GUARD_RETURN_BY_TYPE:
+        return GUARD_RETURN_BY_TYPE[ret_type]
+    if ret_type.startswith("L") or ret_type.startswith("["):
+        return ("const/4 v0, 0x0", "return-object v0", 1)
+    return None
+
+
 def patch_sem_service(path: Path) -> bool:
     text = path.read_text(encoding="utf-8", errors="surrogateescape")
-    if "oneosHasSemHal" in text or MARK in text:
-        return False
     if "requestSpiUsage()Z" not in text:
         return False
 
-    targets = {"requestSpiUsage()Z"} | UNGUARDED_NATIVE_CALLERS
     blocks = text.split("\n.method ")
     if len(blocks) < 2:
         return False
 
+    native_sigs = set()
+    for block in blocks[1:]:
+        hdr = block.splitlines()[0].strip()
+        if " native " in f" {hdr} ":
+            sig = _method_sig(hdr)
+            if sig:
+                native_sigs.add(sig)
+
     new_blocks = [blocks[0]]
     guarded_count = 0
+    existing_labels = set(re.findall(r":(cond_oneos_sem_\d+)\b", text))
+    next_id = 0
+
     for block in blocks[1:]:
         lines = block.splitlines(keepends=True)
         hdr = lines[0].strip()
         sig = _method_sig(hdr)
-        if sig in targets and " native " not in hdr:
+        calls_native = any(c in native_sigs for c in NATIVE_CALL_RE.findall(block))
+        wants_guard = (sig == "requestSpiUsage()Z" or sig in KNOWN_NATIVE_WRAPPERS or calls_native) and " native " not in f" {hdr} "
+        if wants_guard and HELPER_SIG not in block:
             ret_type = sig.rsplit(")", 1)[1]
-            if ret_type not in GUARD_RETURN_BY_TYPE:
+            ret_spec = _guard_return(ret_type)
+            if ret_spec is None:
                 sys.exit(f"oneui_sem_undeclared: unsupported return type in {sig}")
-            const_insn, ret_insn = GUARD_RETURN_BY_TYPE[ret_type]
+            const_insn, ret_insn, min_locals = ret_spec
             inserted = False
             for idx, line in enumerate(lines):
                 if line.strip().startswith(".locals "):
                     cnt = int(line.strip().split()[1])
-                    if cnt < 1:
-                        lines[idx] = "    .locals 1\n"
-                    lbl = f"cond_oneos_sem_{guarded_count}"
+                    if cnt < min_locals:
+                        lines[idx] = f"    .locals {min_locals}\n"
+                    while f"cond_oneos_sem_{next_id}" in existing_labels:
+                        next_id += 1
+                    lbl = f"cond_oneos_sem_{next_id}"
+                    existing_labels.add(lbl)
+                    next_id += 1
                     snippet = (
                         f"{MARK}\n"
-                        "    invoke-static {}, Lcom/android/server/SemService;->oneosHasSemHal()Z\n\n"
+                        f"    invoke-static {{}}, Lcom/android/server/{HELPER_SIG}\n\n"
                         "    move-result v0\n\n"
                         f"    if-nez v0, :{lbl}\n\n"
                         + (f"    {const_insn}\n\n" if const_insn else "")
@@ -128,10 +138,11 @@ def patch_sem_service(path: Path) -> bool:
         return False
 
     joined = "\n.method ".join(new_blocks)
-    anchor = "# direct methods\n"
-    if anchor not in joined:
-        sys.exit("oneui_sem_undeclared: # direct methods section not found")
-    joined = joined.replace(anchor, anchor + HELPER_METHOD, 1)
+    if ".method private static blacklist oneosHasSemHal()Z" not in joined:
+        anchor = "# direct methods\n"
+        if anchor not in joined:
+            sys.exit("oneui_sem_undeclared: # direct methods section not found")
+        joined = joined.replace(anchor, anchor + HELPER_METHOD, 1)
     path.write_text(joined, encoding="utf-8", errors="surrogateescape")
     return True
 

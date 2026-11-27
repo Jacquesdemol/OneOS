@@ -4084,6 +4084,10 @@ if [ "${ONEOS_GUEST_PREVENT_HOTWORD:-1}" = 1 ] || [ "${ONEOS_DEFER_BG_DEXOPT:-1}
     ' oneos-early-opt "${ONEOS_GUEST_PREVENT_HOTWORD:-1}" "${ONEOS_DEFER_BG_DEXOPT:-1}" "${ONEOS_FORCE_PREVENT_HOTWORD:-0}" </dev/null >/dev/null 2>&1 &
 fi
 echo "[Pivoted Root] Launching guest Zygote & SystemServer via zygote_exec..."
+if [ -x /data/oneos_storaged ]; then
+    rm -f /data/system/oneos_storage.sock
+    /data/oneos_storaged --daemon
+fi
 if [ -f /data/oneos_root/enabled ]; then
     /system/bin/sh /data/oneos_runtime.sh pre || exit 3
     /system/bin/sh /data/oneos_runtime.sh late > /data/adb/oneos/run/late.log 2>&1 &

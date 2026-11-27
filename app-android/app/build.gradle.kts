@@ -199,6 +199,8 @@ val sessionScripts: Map<String, File> = linkedMapOf(
     "oneos_essential_key" to File(repoRoot, "switcher/assets/oneos_essential_key"),
     // oneui8test11: an empty BPF ring buffer for One UI 8's tethering module in an Android 17 guest (switcher/native/oneos_bpf_ringbuf.c).
     "oneos_bpf_ringbuf" to File(repoRoot, "switcher/assets/oneos_bpf_ringbuf"),
+    // Guest-namespace storage size and clear daemon (switcher/native/oneos_storaged.c).
+    "oneos_storaged" to File(repoRoot, "switcher/assets/oneos_storaged"),
     // 0.4.33: the status bar's dimension overlays on bar phones
     // (switcher/patches/OneOSOverlayDimen.java, build_overlay_dimen.sh).
     "OneOSOverlayDimen.dex" to File(repoRoot, "switcher/assets/OneOSOverlayDimen.dex"),

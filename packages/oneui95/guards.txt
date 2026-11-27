@@ -1,4 +1,5 @@
 # framework overlays built by scripts/make-overlays.sh with the storage, installd, power, sysrq, weaver, biometric, gatekeeper, pdb, apexd, appid15000, nousers, nativeservices, wipesecrets and ksuappid guards, and the secims carve-out (com.sec.imsservice kept in android.uid.system from /system_ext/priv-app/OneOSSecIms only)
+# guest storage bridge: OneOSStorageHelper routes Settings app/user/external size and Clear Data/Cache to oneos_storaged (patches/guest_storage_bridge.py)
 # installd and IOemNetd codes read on the phone at runtime (OneOSInstalldCodes, OneOSOemNetdCodes): One UI 9.0 and 9.5 phones
 # charger power from Samsung's charging_type in BatteryService (OneOSChargePower)
 # biometric-remove guard: services_patched.jar never removes a fingerprint or face template (patches/guest_no_biometric_remove.py)
@@ -7,10 +8,10 @@
 # telephony-common_patched.jar: the SMS service centre as an international number (patches/guest_smsc_international.py); SEND_SMS error 66 (sent, no result payload) counted as sent (patches/guest_sms_invalid_response.py)
 # libcamera_client_patched.so, libcameracompatbilityinfo_patched.so: the native camera client with One UI's codes (patches/pixel_camera_native.py)
 # 0.5.37 (oneui95_r11): One UI 9.5 phones' camera codes (host_camera_oneui95.txt; guest_prepare.sh binds these when ro.build.version.oneui >= 90500): framework_patched_oneui95.jar
-1062365406bcbbee3ed7995d2194f3ea9957c626b7c8869cad0d536c01446771  services_patched.jar
+eb3cfb8464ac7e8c14b56df27fe27ded5d84b71138c504c0e15bbcda8b722fe3  services_patched.jar
 22c4b0b701d623fc523f3be7e852716b4db384a00783fb6aad0cca9d6c30e941  vold_patched
 1ba375398bf0735df28af2d8e6ab5cd3e5609669e11f1f6dad503bc6e1568655  service.incremental_patched.so
-cc874cf5e25895bbd43927e60de8a63b1965c488a72b44af7bbec00d293ad814  framework_patched.jar
+ccf867974f292df5bab1bcbd81552aec4996550abdc59e74db04c33d3b909e63  framework_patched.jar
 49218f819f3621abf6c3b6712510f0d1fd2a831f81302b77bdef376b08b38887  telephony-common_patched.jar
 23d98173e40ce788bc66d4a9678d06869fe5010ade40f001128b30c17ea57e7a  libcamera_client_patched.so
 720014ae5f57472b16183a563e1761798df3369a9dabe48a834158a5e2a9ce40  libcameracompatbilityinfo_patched.so

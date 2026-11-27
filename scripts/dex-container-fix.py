@@ -26,8 +26,19 @@ import tempfile
 import zipfile
 
 DEX = re.compile(r"classes\d*\.dex$")
-dexdump = sorted(glob.glob(os.path.join(os.environ.get("ANDROID_HOME", "/opt/android-sdk"),
-                                        "build-tools", "*", "dexdump")))[-1]
+
+
+def _find_dexdump():
+    if os.environ.get("DEXDUMP"):
+        return os.environ["DEXDUMP"]
+    hits = sorted(glob.glob(os.path.join(os.environ.get("ANDROID_HOME", "/opt/android-sdk"),
+                                         "build-tools", "*", "dexdump*")))
+    if hits:
+        return hits[-1]
+    return shutil.which("dexdump") or "/apex/com.android.art/bin/dexdump"
+
+
+dexdump = _find_dexdump()
 
 
 def dex_names(jar):

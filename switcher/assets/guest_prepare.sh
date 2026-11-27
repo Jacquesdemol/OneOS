@@ -1562,6 +1562,61 @@ if [ -f "$STAGE/nothing_customringtone.tar" ] && [ "${ONEOS_GUEST_NT_RINGTONES:-
         fi
     fi
 fi
+# Gallery AI (PhotoEditor_AIFull / libPetDetector_v1.camera.samsung.so): One UI 9.5's Photo Editor reads
+# /vendor/etc/petdetector/{studio_pd/studio_pd_cnn.info,config_thresholds.json}. On a One UI 8 host (e.g.
+# SM-S908E) that folder is absent while /vendor/saiv/image_understanding/db/pet_detector/pet_detector_cnn.tflite
+# already exists on host /vendor. Provide the metadata inside the guest's /vendor/etc via overlayfs or
+# farm_dir without modifying the host /vendor partition.
+if [ "${ONEOS_GUEST_PET_DETECTOR:-1}" = 1 ] && [ -d "$ROOTFS/vendor/etc" ] &&
+   [ ! -e "$ROOTFS/vendor/etc/petdetector" ] &&
+   [ -f /vendor/saiv/image_understanding/db/pet_detector/pet_detector_cnn.tflite ]; then
+    PDV="$STAGE/petdetector_ov"
+    mkdir -p "$PDV" && { mount | grep -q " $PDV " || $BB mount -t tmpfs -o size=4m,mode=755 tmpfs "$PDV"; } &&
+        $BB mount --make-private "$PDV" 2>/dev/null || true
+    rm -rf "$PDV/up" && mkdir -p "$PDV/up/petdetector/studio_pd" "$PDV/up/petdetector/aic_pet_detector"
+    cat > "$PDV/up/petdetector/studio_pd/studio_pd_cnn.info" << 'EOF'
+{
+  "version_id": "V1",
+  "tag": "1.0",
+  "model_type": "cpu",
+  "precision": "float32",
+  "compilier": "tflite",
+  "resolution": "512",
+  "input_layer": "inputs_0",
+  "output_layer": "Identity",
+  "model_path": "/vendor/saiv/image_understanding/db/pet_detector/pet_detector_cnn.tflite"
+}
+EOF
+    cp -f "$PDV/up/petdetector/studio_pd/studio_pd_cnn.info" "$PDV/up/petdetector/aic_pet_detector/aic_pet_detector_cnn.info"
+    cp -f "$PDV/up/petdetector/studio_pd/studio_pd_cnn.info" "$PDV/up/petdetector/aic_pet_detector/aic_pet_detector_cnn_system.info"
+    cat > "$PDV/up/petdetector/config_thresholds.json" << 'EOF'
+{
+  "roi_tags": [
+    { "label": "background", "id": 0, "threshold": 1.0, "type": "BG", "cluster_label": "background", "priority_index": 0 },
+    { "label": "Object", "id": 1, "threshold": 1.0, "type": "BG", "cluster_label": "background", "priority_index": 0 },
+    { "label": "person", "id": 2, "threshold": 0.285, "type": "FG", "cluster_label": "alive", "priority_index": 1 },
+    { "label": "petface", "id": 3, "threshold": 0.40, "type": "FG", "cluster_label": "alive", "priority_index": 1 },
+    { "label": "human_head", "id": 4, "threshold": 0.3, "type": "FG", "cluster_label": "alive", "priority_index": 1 },
+    { "label": "pets", "id": 5, "threshold": 0.40, "type": "FG", "cluster_label": "alive", "priority_index": 1 },
+    { "label": "PetEyes", "id": 6, "threshold": 0.20, "type": "FG", "cluster_label": "alive", "priority_index": 1 }
+  ]
+}
+EOF
+    chown -R 0:0 "$PDV/up" && find "$PDV/up" -type d -exec chmod 755 {} + && find "$PDV/up" -type f -exec chmod 644 {} +
+    $BB chcon -R u:object_r:vendor_configs_file:s0 "$PDV/up" 2>/dev/null || true
+    if ! mount | grep -q " $ROOTFS/vendor/etc type overlay" &&
+       $BB mount -t overlay overlay -o "ro,lowerdir=$PDV/up:$ROOTFS/vendor/etc" "$ROOTFS/vendor/etc" 2>/dev/null; then
+        echo "Gallery AI: vendor/etc/petdetector mapped via overlay"
+    elif farm_dir "$ROOTFS/vendor/etc" "$STAGE/vendor_etc_farm" petdetector/ &&
+         [ -d "$ROOTFS/vendor/etc/petdetector" ] &&
+         $BB mount --bind "$PDV/up/petdetector" "$ROOTFS/vendor/etc/petdetector"; then
+        $BB mount -o remount,ro,bind "$ROOTFS/vendor/etc/petdetector" 2>/dev/null || true
+        $BB mount --make-rslave "$ROOTFS/vendor/etc/petdetector" 2>/dev/null || true
+        echo "Gallery AI: vendor/etc/petdetector bound via farm_dir"
+    else
+        echo "!!! WARNING: Gallery AI: could not expose vendor/etc/petdetector in guest"
+    fi
+fi
 # Nothing OS's own sounds: the ringtones of "Nothing Signals" (01_crossing ..
 # 10_clwb), notifications, alarms and the UI sounds (camera click, ...) ship in
 # Nothing's vendor image under product/media/audio, which its init lays over
@@ -5497,6 +5552,11 @@ if [ -f "$STAGE/zygote_exec" ]; then
     cp -f "$STAGE/zygote_exec" "$STAGE/data/zygote_exec"
     chmod 755 "$STAGE/data/zygote_exec"
 fi
+if [ -f "$STAGE/oneos_storaged" ]; then
+    rm -f "$STAGE/data/oneos_storaged"
+    cp -f "$STAGE/oneos_storaged" "$STAGE/data/oneos_storaged"
+    chmod 755 "$STAGE/data/oneos_storaged"
+fi
 # OneOS: the guest's own busybox, copied like zygote_exec. guest_start.sh uses
 # it after the pivot, so nothing in the guest needs host /data/adb (bound
 # read-only below).
@@ -5634,6 +5694,22 @@ done
 mkdir -p "$STAGE/data/resource-cache"
 chmod 771 "$STAGE/data/resource-cache"
 chown 1000:1000 "$STAGE/data/resource-cache"
+if [ -f "$STAGE/data/system/overlays.xml" ] && [ -s "$STAGE/data/system/overlays.xml" ]; then
+    { ls -1 "$STAGE/data/resource-cache" 2>/dev/null; printf '__ONEOS_RC_END__\n'; cat "$STAGE/data/system/overlays.xml"; } | "$BB" awk '
+        !done { if ($0 == "__ONEOS_RC_END__") { done = 1; next } have[$0] = 1; next }
+        /baseCodePath="\/data\/resource-cache\/[^"]+"/ {
+            s = $0
+            sub(/.*baseCodePath="\/data\/resource-cache\//, "", s)
+            sub(/".*/, "", s)
+            if (s != "" && !(s in have)) next
+        }
+        { print }
+    ' > "$STAGE/data/system/overlays.xml.oneos_tmp" &&
+    [ -s "$STAGE/data/system/overlays.xml.oneos_tmp" ] &&
+    mv -f "$STAGE/data/system/overlays.xml.oneos_tmp" "$STAGE/data/system/overlays.xml" &&
+    chown 1000:1000 "$STAGE/data/system/overlays.xml" 2>/dev/null &&
+    chmod 660 "$STAGE/data/system/overlays.xml" 2>/dev/null || rm -f "$STAGE/data/system/overlays.xml.oneos_tmp"
+fi
 # One UI's side of the resource-cache bridge (bridges.sh): One UI's idmap2
 # writes One UI's idmaps here during the session, never over the guest's
 # data/resource-cache, whose idmaps the guest's zygote has mapped. Made new
