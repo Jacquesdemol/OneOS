@@ -70,6 +70,115 @@ def test_rtts_patcher() -> None:
         r2 = subprocess.run([sys.executable, str(patcher), str(root)], capture_output=True, text=True, check=True)
         assert r2.stdout.strip() == "", f"expected empty on second run: {r2.stdout!r}"
 
+        # RealTimeTokenService.initialize() + TokenJniBridge wrapper guards + idempotency
+        rtts_svc = root / "smali/com/android/server/RealTimeTokenService.smali"
+        bridge = root / "smali/com/android/server/TokenJniBridge.smali"
+        rtts_svc.parent.mkdir(parents=True, exist_ok=True)
+        rtts_svc.write_text(
+            ".class public final Lcom/android/server/RealTimeTokenService;\n"
+            ".super Ljava/lang/Object;\n"
+            ".method public final initialize()Z\n"
+            "    .locals 2\n"
+            "    const/4 v0, 0x1\n"
+            "    return v0\n"
+            ".end method\n"
+        )
+        bridge.write_text(
+            ".class public Lcom/android/server/TokenJniBridge;\n"
+            ".super Ljava/lang/Object;\n"
+            ".method public final initTokenStorageWrapper()I\n"
+            "    .locals 1\n"
+            "    const/4 v0, 0x0\n"
+            "    return v0\n"
+            ".end method\n"
+        )
+        r3 = subprocess.run([sys.executable, str(patcher), str(root)], capture_output=True, text=True, check=True)
+        assert "smali" in r3.stdout.split()
+        assert "ServiceManager;->checkService(" in rtts_svc.read_text()
+        assert "ServiceManager;->checkService(" in bridge.read_text()
+        assert "-0x65" in bridge.read_text()
+        r4 = subprocess.run([sys.executable, str(patcher), str(root)], capture_output=True, text=True, check=True)
+        assert r4.stdout.strip() == ""
+
+
+def test_sem_featureutil_and_sw_hotword_patchers() -> None:
+    sem_patch = ROOT / "switcher/patches/oneui_sem_undeclared.py"
+    fu_patch = ROOT / "switcher/patches/oneui_featureutil_missing_file.py"
+    hw_patch = ROOT / "switcher/patches/guest_no_sw_hotword.py"
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        sem = root / "smali_classes6/com/android/server/SemService.smali"
+        sem.parent.mkdir(parents=True, exist_ok=True)
+        sem.write_text(
+            ".class public final Lcom/android/server/SemService;\n"
+            ".super Ljava/lang/Object;\n"
+            "# direct methods\n"
+            ".method private blacklist requestSpiUsage()Z\n"
+            "    .locals 2\n"
+            "    const/4 v0, 0x1\n"
+            "    return v0\n"
+            ".end method\n"
+            ".method public declared-synchronized blacklist synchronizedCloseSpi(I)I\n"
+            "    .locals 0\n"
+            "    invoke-virtual {p0, p1}, Lcom/android/server/SemService;->closeSpi(I)I\n"
+            "    move-result p0\n"
+            "    return p0\n"
+            ".end method\n"
+        )
+        r = subprocess.run([sys.executable, str(sem_patch), str(root)], capture_output=True, text=True, check=True)
+        assert r.stdout.strip() == "smali_classes6"
+        sem_txt = sem.read_text()
+        assert "oneosHasSemHal()Z" in sem_txt
+        assert "ISehSem/default" in sem_txt
+        assert "    .locals 1\n" in sem_txt
+        assert subprocess.run([sys.executable, str(sem_patch), str(root)], capture_output=True, text=True, check=True).stdout.strip() == ""
+
+        fu = root / "smali_classes6/com/samsung/android/feature/FeatureUtil.smali"
+        fu.parent.mkdir(parents=True, exist_ok=True)
+        fu.write_text(
+            ".class Lcom/samsung/android/feature/FeatureUtil;\n"
+            ".super Ljava/lang/Object;\n"
+            ".method static blacklist getSecCarrierFeature(Ljava/lang/String;Ljava/lang/String;I)Lcom/samsung/android/feature/SecCarrier;\n"
+            "    .locals 5\n"
+            '    const-string/jumbo v1, "files does not exist from "\n'
+            "    const/4 v2, 0x0\n"
+            "    const/4 v4, 0x0\n"
+            "    if-nez v4, :cond_1\n\n"
+            "    .line 69\n"
+            "    sget-object p1, Lcom/samsung/android/feature/FeatureUtil;->LOG_TAG:Ljava/lang/String;\n\n"
+            "    new-instance p2, Ljava/lang/StringBuilder;\n\n"
+            "    invoke-direct {p2, v1}, Ljava/lang/StringBuilder;-><init>(Ljava/lang/String;)V\n\n"
+            "    invoke-virtual {p2, p0}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;\n\n"
+            "    invoke-virtual {p2}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;\n\n"
+            "    move-result-object p2\n\n"
+            "    invoke-static {p1, p2}, Landroid/util/Log;->w(Ljava/lang/String;Ljava/lang/String;)I\n\n"
+            "    return-object v2\n"
+            "    :cond_1\n"
+            "    return-object v2\n"
+            ".end method\n"
+        )
+        r = subprocess.run([sys.executable, str(fu_patch), str(root)], capture_output=True, text=True, check=True)
+        assert r.stdout.strip() == "smali_classes6"
+        fu_txt = fu.read_text()
+        assert '"/optics/"' in fu_txt and '"/omr/"' in fu_txt
+        assert subprocess.run([sys.executable, str(fu_patch), str(root)], capture_output=True, text=True, check=True).stdout.strip() == ""
+
+        hw = root / "smali_classes2/com/android/server/voiceinteraction/VoiceInteractionManagerService$VoiceInteractionManagerServiceStub.smali"
+        hw.parent.mkdir(parents=True, exist_ok=True)
+        hw.write_text(
+            ".class public Lcom/android/server/voiceinteraction/VoiceInteractionManagerService$VoiceInteractionManagerServiceStub;\n"
+            ".super Ljava/lang/Object;\n"
+            ".method public final startListeningFromMic(Landroid/media/AudioFormat;Landroid/service/voice/IMicrophoneHotwordDetectionVoiceInteractionCallback;)V\n"
+            "    .locals 3\n"
+            "    return-void\n"
+            ".end method\n"
+        )
+        r = subprocess.run([sys.executable, str(hw_patch), str(root)], capture_output=True, text=True, check=True)
+        assert r.stdout.strip() == "smali_classes2"
+        assert "debug.soundtrigger_middleware.use_mock_hal" in hw.read_text()
+        assert subprocess.run([sys.executable, str(hw_patch), str(root)], capture_output=True, text=True, check=True).stdout.strip() == ""
+
 
 def test_ld_config_awk() -> None:
     gp = (ROOT / "switcher/assets/guest_prepare.sh").read_text()
@@ -191,11 +300,21 @@ def test_wired_fixes() -> None:
     assert "guest_crash.log" in (ROOT / "scripts/pull-run-logs.sh").read_text()
 
     assert "oneui_rtts_undeclared.py" in (ROOT / "scripts/make-overlays.sh").read_text()
+    assert "guest_no_sw_hotword.py" in (ROOT / "scripts/make-overlays.sh").read_text()
     assert "oneui_rtts_undeclared.py" in (ROOT / "scripts/patch-framework-camera.sh").read_text()
+    assert "oneui_sem_undeclared.py" in (ROOT / "scripts/patch-framework-camera.sh").read_text()
+    assert "oneui_featureutil_missing_file.py" in (ROOT / "scripts/patch-framework-camera.sh").read_text()
+    assert "placeholder /data/system/Kumiho/Kumiho.policy created" in gp
 
 
 def main() -> int:
-    tests = [test_rtts_patcher, test_ld_config_awk, test_return_ip_rule_norm, test_wired_fixes]
+    tests = [
+        test_rtts_patcher,
+        test_sem_featureutil_and_sw_hotword_patchers,
+        test_ld_config_awk,
+        test_return_ip_rule_norm,
+        test_wired_fixes,
+    ]
     for fn in tests:
         fn()
         print(f"PASS {fn.__name__}")

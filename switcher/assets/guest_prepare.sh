@@ -8270,13 +8270,21 @@ fi
 # and a guest never gets; MessageGuardSync died on it again and again ("/data/system/Kumiho/Kumiho.policy: open
 # failed: ENOENT", 4 One UI 9.5 reports, S25 01073ad0). One UI's copy, owner, mode and label kept, when the guest
 # has none.
-if grep -q '^ro.build.version.oneui=' "$ROOTFS/system/build.prop" 2>/dev/null && [ -f /data/system/Kumiho/Kumiho.policy ] &&
+if grep -q '^ro.build.version.oneui=' "$ROOTFS/system/build.prop" 2>/dev/null &&
    [ -d "$STAGE/data/system" ] && [ ! -L "$STAGE/data/system" ] && [ ! -e "$STAGE/data/system/Kumiho/Kumiho.policy" ] &&
    [ ! -L "$STAGE/data/system/Kumiho" ]; then
-    if cp -a /data/system/Kumiho "$STAGE/data/system/" 2>/dev/null; then
-        echo "Message Guard: One UI's /data/system/Kumiho policy copied for the guest"
-    else
-        echo "Message Guard: One UI's policy could not be copied"
+    if [ -f /data/system/Kumiho/Kumiho.policy ]; then
+        if cp -a /data/system/Kumiho "$STAGE/data/system/" 2>/dev/null; then
+            echo "Message Guard: One UI's /data/system/Kumiho policy copied for the guest"
+        else
+            echo "Message Guard: One UI's policy could not be copied"
+        fi
+    elif mkdir -p "$STAGE/data/system/Kumiho" 2>/dev/null && : > "$STAGE/data/system/Kumiho/Kumiho.policy" 2>/dev/null; then
+        $BB chown -h 1000:1000 "$STAGE/data/system/Kumiho" "$STAGE/data/system/Kumiho/Kumiho.policy" 2>/dev/null || true
+        $BB chmod 0755 "$STAGE/data/system/Kumiho" 2>/dev/null || true
+        $BB chmod 0644 "$STAGE/data/system/Kumiho/Kumiho.policy" 2>/dev/null || true
+        $BB chcon -h -R u:object_r:system_data_file:s0 "$STAGE/data/system/Kumiho" 2>/dev/null || true
+        echo "Message Guard: placeholder /data/system/Kumiho/Kumiho.policy created (host lacks One UI 9 policy)"
     fi
 fi
 # One UI images on a Galaxy A or M phone (0.5.32): the A series' own Samsung Camera (the Galaxy A36's, One UI on

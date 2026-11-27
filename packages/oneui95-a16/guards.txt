@@ -12,14 +12,14 @@
 # r7 (0.5.39): framework_patched_oneui8.jar, framework_patched.jar with One UI 8's camera codes (switcher/patches/a16_camera.py, host_camera_oneui8.txt; guest_prepare.sh binds it on a One UI 8 phone and turns the camera on)
 # 0.5.42 (oneui95_a16_r8): services_patched.jar with the guest's own screen lock (patches/guest_local_lock.py, adapted to One UI 9.5's R8 build)
 # 0.5.45 (oneui95_a16_r9): framework_patched_oneui85.jar, framework_patched.jar with One UI 8.5's camera codes (switcher/patches/a16_camera.py with ONEOS_A16_CAMERA_HOST=oneui85, host_camera_oneui85.txt)
-8718d43ced81a72ff5ab6db4ec9a9fd7b7c224bacaf56f7f95fb55a82b1a0eda  services_patched.jar
+bfb3cd9dd7b7a15285b69018aaaf8e29474815c2aaf0c68d00b973bdc4d3f9c5  services_patched.jar
 22c4b0b701d623fc523f3be7e852716b4db384a00783fb6aad0cca9d6c30e941  vold_patched
 1ba375398bf0735df28af2d8e6ab5cd3e5609669e11f1f6dad503bc6e1568655  service.incremental_patched.so
-b07ef781765d2f25cd0c7d76f79817500e1c238a32d9891c8990f900687fb956  framework_patched.jar
+a5c5e934564abfef1a673579c22a29a60640c4196ef6f67ceb95df84ccf55092  framework_patched.jar
 6ff8de9fd13739384dc426e7be7571ce39fcb945e4f089e22f1b6740bd442d39  telephony-common_patched.jar
 23d98173e40ce788bc66d4a9678d06869fe5010ade40f001128b30c17ea57e7a  libcamera_client_patched.so
 720014ae5f57472b16183a563e1761798df3369a9dabe48a834158a5e2a9ce40  libcameracompatbilityinfo_patched.so
 # r7 (0.5.39): framework_patched_oneui8.jar, framework_patched.jar with One UI 8's camera codes (switcher/patches/a16_camera.py, host_camera_oneui8.txt; guest_prepare.sh binds it on a One UI 8 phone and turns the camera on; empty MultiResConcurrentReadersStartInfo[] init)
-6e4081527d3085a3f9d352bf0ac63fb2c736d671897b52d0f2cd9c0767b1a92d  framework_patched_oneui8.jar
+a3f4273b039eb745dc20e11ac4701533426a3fe86fa8a511c893c9b085d587a7  framework_patched_oneui8.jar
 # 0.5.45 (oneui95_a16_r9): framework_patched_oneui85.jar, framework_patched.jar with One UI 8.5's camera codes (switcher/patches/a16_camera.py with ONEOS_A16_CAMERA_HOST=oneui85, host_camera_oneui85.txt: One UI 8's numbering, CameraCompatibilityInfo as One UI 9.0 writes it; empty MultiResConcurrentReadersStartInfo[] init)
-b44ee65e2914beaf6a694fa69de359b82cb66ea3915717382e15bc76b0a12de1  framework_patched_oneui85.jar
+2e8603f01cc2e8f2d9becc4821da1b7e24818e9109e4e63865198de8f9cc03bc  framework_patched_oneui85.jar

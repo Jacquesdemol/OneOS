@@ -496,6 +496,9 @@ if "$DEBUGFS" -R "cat /system/build.prop" "$IMG" 2>/dev/null | grep -q '^ro.buil
     # ("Unable to load SELinux MMAC policy" on the A07, S23 and Fold8).
     KEY_DIRS="$KEY_DIRS $(python3 -I "$ROOT/switcher/patches/oneui_mmac_empty_signer.py" "$WORK/services")" || exit 1
 fi
+# Prevent background software hotword microphone capture (word_detector_0 / AudioIn wakelock)
+# whenever OneOS enables debug.soundtrigger_middleware.use_mock_hal.
+KEY_DIRS="$KEY_DIRS $(python3 -I "$ROOT/switcher/patches/guest_no_sw_hotword.py" "$WORK/services")" || exit 1
 # A dex the added OneOS classes push past 65536 method references (the Pixel 9
 # Pro XL's classes2: 65568) gets them moved to a dex of their own after the
 # last one: one jar, one class loader, so they keep their package access.

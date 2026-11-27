@@ -92,7 +92,9 @@ PD=$(python3 -I "$ROOT/switcher/patches/oneui_no_privacy_display.py" "$WORK/fw")
 # set oneui95 r4; nothing on images without EngineeringModeManager).
 ED=$(python3 -I "$ROOT/switcher/patches/oneui_engmode_undeclared.py" "$WORK/fw") || exit 1
 RD_RTTS=$(python3 -I "$ROOT/switcher/patches/oneui_rtts_undeclared.py" "$WORK/fw") || exit 1
-for d in $PM $PD $ED $RD_RTTS; do
+SD_SEM=$(python3 -I "$ROOT/switcher/patches/oneui_sem_undeclared.py" "$WORK/fw") || exit 1
+FD_FEAT=$(python3 -I "$ROOT/switcher/patches/oneui_featureutil_missing_file.py" "$WORK/fw") || exit 1
+for d in $PM $PD $ED $RD_RTTS $SD_SEM $FD_FEAT; do
     case " $DIRS " in *" $d "*) ;; *) DIRS="$DIRS $d" ;; esac
 done
 java -jar "$APKTOOL" b -q -o "$WORK/fw-rebuilt.jar" "$WORK/fw"
