@@ -181,6 +181,12 @@ data class GateInput(
      * WARN and a tick at the Android version gate, and the installd gate takes One UI 8's tables for it.
      */
     val a17OnA16: Boolean = Experimental.a17OnA16,
+    /**
+     * True when the staged set's `guards.txt` declares gatekeeper, weaver, and
+     * biometric isolation guards so a host PIN/pattern stays untouched without
+     * turning on the risky unguarded override.
+     */
+    val lockIsolatedByGuards: Boolean = false,
 )
 
 /**
@@ -359,7 +365,7 @@ object SwitchGates {
         space(phase, input, image, set)?.let { out += Gate(it) }
         out += Gate(
             if (switching) {
-                ScreenLockRule.switchGate(input.screenLockSet, input.allowScreenLock)
+                ScreenLockRule.switchGate(input.screenLockSet, input.allowScreenLock, input.lockIsolatedByGuards)
             } else {
                 ScreenLockRule.finding(input.screenLockSet).copy(id = ID_SCREEN_LOCK)
             },

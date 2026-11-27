@@ -131,6 +131,13 @@ class GatesTest {
         val unknown = eval(GatePhase.SWITCH, input(Bundles.S26U).copy(screenLockSet = null))
         assertEquals(Level.BLOCK, unknown.level(SwitchGates.ID_SCREEN_LOCK))
 
+        // Guarded isolation keeps the lock untouched and lets Switch proceed with WARN and no extra tick.
+        val guarded = eval(GatePhase.SWITCH, input(Bundles.S26U).copy(screenLockSet = true, lockIsolatedByGuards = true))
+        assertEquals(Level.WARN, guarded.level(SwitchGates.ID_SCREEN_LOCK))
+        assertEquals(ScreenLockRule.R_SET_ISOLATED, guarded.find(SwitchGates.ID_SCREEN_LOCK)!!.finding.reason)
+        assertNull(guarded.find(SwitchGates.ID_SCREEN_LOCK)!!.ack)
+        assertTrue(guarded.allows(guarded.toTick.mapNotNull { it.tickKey }.toSet()))
+
         // Prepare only warns.
         val prepare = eval(GatePhase.PREPARE, input(Bundles.S26U).copy(screenLockSet = true))
         assertEquals(Level.WARN, prepare.level(SwitchGates.ID_SCREEN_LOCK))

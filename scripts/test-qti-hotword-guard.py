@@ -27,6 +27,12 @@ class QtiHotwordGuardTest(unittest.TestCase):
         self.assertNotIn('[ ! -f /data/oneos_hotword_preblocked ]', ak_body)
         self.assertIn("apply_hw_preblock()", START)
         self.assertIn("RECORD_AUDIO_HOTWORD deny", START)
+        self.assertIn("RECEIVE_SANDBOX_TRIGGER_AUDIO deny", START)
+        self.assertIn("com.samsung.android.bixby.wakeup", START)
+        self.assertIn(
+            "debug.soundtrigger_middleware.use_mock_hal",
+            (ROOT / "switcher/assets/guest_props.sh").read_text(encoding="utf-8"),
+        )
 
         block = HOTWORD_ANCHOR + START.split(HOTWORD_ANCHOR, 1)[1].split(HOTWORD_END, 1)[0] + HOTWORD_END
         self.tmp = tempfile.TemporaryDirectory()

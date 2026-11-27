@@ -5533,6 +5533,12 @@ if ls "$STAGE/data/system_de/0/spblob"/*.weaver >/dev/null 2>&1; then
           "$STAGE/data/system/locksettings.db-shm" "$STAGE/data/system"/gatekeeper.*.key 2>/dev/null
     echo "Guest lock state from before the weaver guard removed (stage only); ColorOS makes a new one"
 fi
+mkdir -p "$STAGE/data/misc/gatekeeper"
+if [ -f "$STAGE/data/system/oneos_guest_lock" ]; then
+    echo "Guest lock: isolated PBKDF2 record active in stage; One UI host locksettings/spblob untouched"
+else
+    echo "Guest lock: stage-isolated spblob/gatekeeper ready; One UI host locksettings/spblob untouched"
+fi
 mkdir -p "$STAGE/data/misc/user/0" "$STAGE/data/misc_de/0" "$STAGE/data/misc_ce/0"
 echo "=== 5.8 $(date +%T) adb, relro, busybox, locks ==="
 # The guest has no vold_prepare_subdirs, so nothing creates the per-user APEX

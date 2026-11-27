@@ -278,3 +278,65 @@ Análise baseada nos logs completos em `/data/data/com.termux/files/home/agy/one
   - Pré-bloqueio `apply_hw_preblock()` passa a aplicar `cmd appops set "$hw" RECORD_AUDIO_HOTWORD deny` (com fallback `ignore`), registra resultado detalhado em `/data/oneos_hotword_preblock.log` e reaplica após `20 s`.
   - Em `hotword_off()` / `audio_keeper`: corrigido filtro do `logcat` para `-s "PAL:I" "COSR:I" "SoundTriggerMiddlewareLogging:I" "*:S"`, incluída detecção de `SessionAlsaPcm:.*pcm_(start|write) failed` com `state(0)`/`card status 0`, removido o bloqueio pelo arquivo `/data/oneos_hotword_preblocked` (substituído por cooldown de `20 s` e limite de `5` intervenções por sessão), extraído dinamicamente o cliente anexado em `SoundTriggerMiddlewareLogging: ATTACH` e mantido reinício coordenado de `vendor.audio-hal*` + `audioserver`.
 - [test-qti-hotword-guard.py](file:///data/data/com.termux/files/home/agy/OneOS/scripts/test-qti-hotword-guard.py): adicionada suíte unitária validando ausência de apóstrofos em `audio_keeper`, filtro `"PAL:I"`, `RECORD_AUDIO_HOTWORD deny`, parsing dinâmico do cliente em log real e cooldown.
+
+---
+
+## Correções Fases 1–5 (`estudo.md` — Sessão `ed6709971aafa046`, `SM-S908E`, App `0.5.46 (189)`, `oneui95-s948b`)
+
+Análise completa e correções aplicadas em ordem estrita com base nos logs da sessão [oneos-logs-ed6709971aafa046](file:///data/data/com.termux/files/home/agy/oneos-logs-ed6709971aafa046/summary.txt) (`SM-S908E` / `s-ultra-8450`, host One UI 8, guest `oneui95-s948b`).
+
+### Fase 1 — Correção Definitiva de Áudio Invertido por Bloqueio/Desbloqueio de Tela (`QTI PAL` / `ADSP SSR`)
+- **Causa raiz nos logs (`boot.log`, `cpu_top.log`):**
+  - Após o primeiro bloqueio de tela (`02:14:14`), `PAL: StreamSoundTrigger` carregava `HOTWORD` (`va-mic-mono-lpi`) em `37-PAL_DEVICE_IN_HANDSET_VA_MIC`, derrubando `msm/adsp/audio_pd` (`COSR: ar_osal_pd_notifier_cb state(0)` -> `pcm_start failed -102`) e gerando loop de recuperação `rproc_recovery_wq` (`58,6%` CPU).
+  - Processos Samsung/bixby (`com.samsung.android.bixby.wakeup`, `com.samsung.android.bixby.agent`, `word_detector_0`) e Google/AS permaneciam elegíveis; `AudioService` (`AudioService$5.smali`, `AudioService$SamsungBroadcastReceiver.smali`) alternava `screen_state=off`/`on`, e `hotword_off()` perdia a janela de 300 linhas do logcat durante rajadas `PAL:I` e encerrava permanentemente em `hw_cnt=5`.
+- **Alterações aplicadas:**
+  - [guest_props.sh](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/guest_props.sh): define `debug.soundtrigger_middleware.use_mock_hal=1` em hosts QTI (`ONEOS_GUEST_PREVENT_HOTWORD=1`), registrado em `$OVR`/`$ADDED` para restauração no retorno; faz `DefaultHalFactory.create()` cair em `FakeHalFactory` (`FakeSoundTriggerHal`) em memória sem tocar no PAL/ADSP físico.
+  - [guest_start.sh](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/guest_start.sh): amplia `apply_hw_preblock()` e `hotword_off()` para negar `RECORD_AUDIO_HOTWORD` e `RECEIVE_SANDBOX_TRIGGER_AUDIO` (`deny`) para pacotes Bixby (`bixby.wakeup`, `bixby.agent`, `intellivoiceservice`), Android System Intelligence (`com.google.android.as`, `com.google.android.as.oss`) e hotword Google, força parada de daemons headless, eleva `hw_cnt` de `5` para `20` (backoff de `60 s` após `3` intervenções) e consulta `SoundTriggerMiddlewareLogging:I` separadamente.
+  - [oneos_switch.sh](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/oneos_switch.sh): adiciona `PAL:E COSR:I SoundTriggerMiddlewareLogging:I` ao `sound_watch.log`.
+  - [test-qti-hotword-guard.py](file:///data/data/com.termux/files/home/agy/OneOS/scripts/test-qti-hotword-guard.py): inclui asserções para `RECEIVE_SANDBOX_TRIGGER_AUDIO deny`, `com.samsung.android.bixby.wakeup` e `use_mock_hal`.
+
+### Fase 2 — Estabilização da `SamsungCamera` (`NullPointerException` em `multiResConcurrentReadersStartInfo[]`)
+- **Causa raiz confirmada nos overlays (`oneui95-a16`):**
+  - `a16_camera.py:patch_capture_result_extras` inicializava `CaptureResultExtras.multiResConcurrentReadersStartInfo` como `null` (`const/4 v0, 0x0`), disparando `NullPointerException` (`array-length`) em `CameraDeviceImpl$CameraDeviceCallbacks.sendOnMultiResolutionOutputStarted` ao abrir a câmera.
+- **Alterações aplicadas:**
+  - [a16_camera.py](file:///data/data/com.termux/files/home/agy/OneOS/switcher/patches/a16_camera.py): atualizado `patch_capture_result_extras` para emitir `new-array \2, \2, [Landroid/hardware/camera2/impl/MultiResConcurrentReadersStartInfo;` (array vazio de tamanho 0).
+  - Recompilado `classes2.dex` (`ZIP_STORED`) nos overlays [framework_patched_oneui8.jar](file:///data/data/com.termux/files/home/agy/OneOS/packages/oneui95-a16/framework_patched_oneui8.jar) (`SHA-256: 6e4081527d3085a3f9d352bf0ac63fb2c736d671897b52d0f2cd9c0767b1a92d`) e [framework_patched_oneui85.jar](file:///data/data/com.termux/files/home/agy/OneOS/packages/oneui95-a16/framework_patched_oneui85.jar) (`SHA-256: b44ee65e2914beaf6a694fa69de359b82cb66ea3915717382e15bc76b0a12de1`), com atualização de [guards.txt](file:///data/data/com.termux/files/home/agy/OneOS/packages/oneui95-a16/guards.txt).
+
+### Fase 3 — Redução de Lentidão no Boot e Aquecimento (`heat_cap` + `dex2oat`)
+- **Causa raiz nos logs (`takeover_app.log`, `data_local_tmp_oneos_data_takeover.log`, `heat_cap.log`, `diag_series.txt`, `diag_90_throttle.txt`):**
+  1. `guest_start.sh` esperava `50 * 0.2 = 10 s` pelo serviço AIDL `android.hardware.audio.core.IModule/default` no `SM-S908E` (apenas HIDL).
+  2. `dalvik.vm.dex2oat-cpu-set` fixado somente em núcleos LITTLE (`0,1,2,3`), alongando o `odrefresh` (`29 s`, `105` arquivos).
+  3. `heat_cap` usava gatilhos tardios (`45/47/50 °C` com corte uniforme `80/65/50%`), limiar alto de carregador direto (`520`/`560` -> `52/56 °C`), `GUEST_THERMAL_MAP` permissivo (`47/50/53/56 °C`) e nenhum controle da GPU Adreno KGSL.
+- **Alterações aplicadas:**
+  - [guest_start.sh](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/guest_start.sh): ignora a espera de `10 s` por `IModule/default` quando o VINTF do host não declara `android.hardware.audio.core`.
+  - [guest_props.sh](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/guest_props.sh): mantém `dalvik.vm.background-dex2oat-cpu-set` nos núcleos LITTLE (`policy0`) e libera `dalvik.vm.dex2oat-cpu-set` para `policy0 + policy4`.
+  - [oneos_switch.sh](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/oneos_switch.sh): reequilibra `heat_cap` para `43/46/49 °C` de pele com limites assimétricos por cluster (`LITTLE: 95/85/75%`, `Big/Prime: 85/70/55%`), carregamento direto em `460/500`, `GUEST_THERMAL_MAP` em `45/48/51/55 °C`, e limite progressivo na GPU Adreno KGSL (`devfreq/max_freq` em `80%/65%` nos níveis `2–3` com registro em `$STAGE/gpu_cap.active`).
+  - [return_to_oneui.sh](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/return_to_oneui.sh): restaura `$STAGE/gpu_cap.active` no retorno à One UI.
+
+### Fase 4 — Arquitetura Segura para Troca de OS com Padrão/PIN e Digitais `QBT2608` Ativos
+- **Implementação segura sem `locksettings clear` nem credenciais em texto puro:**
+  - Aproveita e impõe explicitamente a cadeia de isolamento (`guest_no_gatekeeper.py`, `guest_no_weaver.py`, `guest_no_biometric_remove.py`, `OneOSGuestLock` com PBKDF2-HMAC-SHA256 `100.000` rodadas em `/data/system/oneos_guest_lock`):
+  - [oneos_switch.sh](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/oneos_switch.sh) & [return_to_oneui.sh](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/return_to_oneui.sh):
+    - Pré-verificação antes de parar a One UI: ao detectar trava/biometria ativa no host (`/data/system/gatekeeper.*.key`, `/data/system_de/0/spblob/*`, `/data/system/users/0/settings_fingerprint*.xml`, `/data/vendor_de/0/fpdata/*`), exige `gatekeeper`, `weaver` e `biometric` (e `# biometric-remove guard` quando `ONEOS_GUEST_BIOMETRICS=1`) em `$STAGE/guards.txt` antes de prosseguir (salvo `ONEOS_ALLOW_UNGUARDED_LOCK=1`).
+    - Expande `host_state()` em ambos os scripts para snapshot de integridade (`stat`) sobre `/data/system_de/0/spblob`, `/data/vendor_de/0/fpdata`, `/data/system/locksettings.db`, `/data/system/gatekeeper.*.key` e `/data/system/users/0/settings_fingerprint*.xml`.
+  - [guest_prepare.sh](file:///data/data/com.termux/files/home/agy/OneOS/switcher/assets/guest_prepare.sh): cria `/data/misc/gatekeeper` no estágio e registra isolamento do registro PBKDF2 `oneos_guest_lock` mantendo `locksettings`/`spblob` do host intactos.
+  - App Android ([PackageSets.kt](file:///data/data/com.termux/files/home/agy/OneOS/app-android/core/model/src/main/kotlin/com/fahadali/oneos/core/model/PackageSets.kt), [ScreenLock.kt](file:///data/data/com.termux/files/home/agy/OneOS/app-android/core/model/src/main/kotlin/com/fahadali/oneos/core/model/ScreenLock.kt), [Gates.kt](file:///data/data/com.termux/files/home/agy/OneOS/app-android/core/model/src/main/kotlin/com/fahadali/oneos/core/model/Gates.kt), [Plain.kt](file:///data/data/com.termux/files/home/agy/OneOS/app-android/core/model/src/main/kotlin/com/fahadali/oneos/core/model/Plain.kt), [AppAssets.kt](file:///data/data/com.termux/files/home/agy/OneOS/app-android/app/src/full/kotlin/com/fahadali/oneos/session/AppAssets.kt), [StageCheck.kt](file:///data/data/com.termux/files/home/agy/OneOS/app-android/app/src/full/kotlin/com/fahadali/oneos/session/StageCheck.kt), [LaunchJob.kt](file:///data/data/com.termux/files/home/agy/OneOS/app-android/app/src/full/kotlin/com/fahadali/oneos/session/LaunchJob.kt)):
+    - Adiciona `PackageSets.LOCK_ISOLATION_GUARDS`, `AppAssets.hasLockIsolationGuards()`, `GateInput.lockIsolatedByGuards` e `ScreenLockRule.R_SET_ISOLATED`, permitindo o switch com trava ativa em modo `WARN` seguro (mantendo falha fechada `BLOCK` quando o estado da trava for ilegível `null` ou quando os guards não estiverem presentes).
+  - Testes adicionados/atualizados: [ScreenLockRuleTest.kt](file:///data/data/com.termux/files/home/agy/OneOS/app-android/core/model/src/test/kotlin/com/fahadali/oneos/core/model/ScreenLockRuleTest.kt), [GatesTest.kt](file:///data/data/com.termux/files/home/agy/OneOS/app-android/core/model/src/test/kotlin/com/fahadali/oneos/core/model/GatesTest.kt), [PlainTest.kt](file:///data/data/com.termux/files/home/agy/OneOS/app-android/core/model/src/test/kotlin/com/fahadali/oneos/core/model/PlainTest.kt) e [test-host-lock-guard.py](file:///data/data/com.termux/files/home/agy/OneOS/scripts/test-host-lock-guard.py).
+
+### Fase 5 — Estudo Técnico: Controle Térmico One UI (`sdhms` / SSRM / `ThermalHAL`)
+- Documentação completa gerada em [ESTUDO_ONEUI_HEAT_CONTROL.md](file:///data/data/com.termux/files/home/agy/OneOS/ESTUDO_ONEUI_HEAT_CONTROL.md) (sem alterações de código nativo SSRM/SDHMS), cobrindo o fluxo host (`ssrm.jar` + `com.sec.android.sdhms` + `CFMS` + `cpufreq_max_limit` + `sec-battery/siop_level` + `vendor.samsung.hardware.thermal@1.0-service` + `thermal-engine-v2`), limitações no guest `oneui95-s948b` e opções de portabilidade futura.
+
+### Verificação após as Últimas Edições
+- **Shell syntax (`sh -n` e `dash -n`)** em `guest_props.sh`, `guest_start.sh`, `oneos_switch.sh`, `return_to_oneui.sh` e `guest_prepare.sh`: código `0` em todos.
+- **Suítes Python (`python3 scripts/test-*.py`):**
+  - `test-qti-hotword-guard.py`: `Ran 2 tests ... OK`
+  - `test-audio-hal-stale-restart.py`: `Ran 4 tests ... OK`
+  - `test-boot-fixes.py`: `ALL 4 BOOT FIX TESTS PASSED`
+  - `test-verified-overlays.py`: `Ran 4 tests ... OK`
+  - `test-samsung-camera-bind.py`: `Ran 3 tests ... OK`
+  - `test-host-lock-guard.py`: `Ran 4 tests ... OK`
+  - `test-guest-local-lock.py`: `Ran 31 tests ... OK`
+- **Checksum de overlays (`packages/oneui95-a16`):** `sha256sum -c guards.txt --ignore-missing` -> `services_patched.jar`, `framework_patched.jar`, `telephony-common_patched.jar`, `framework_patched_oneui8.jar`, `framework_patched_oneui85.jar`: `OK`.
+- **Gradle (`app-android`):** `./gradlew :core:model:test --no-daemon --offline` -> `BUILD SUCCESSFUL` (`:core:root:testDebugUnitTest` / `:app:compileFullDebugKotlin` requerem `ANDROID_HOME` configurado em CI/desktop, não disponível no ambiente Termux).
+- **Observação de empacotamento:** `app-android/packages/oneui95-a16.sha256` permanece no baseline do APK até que os binários atualizados de `packages/oneui95-a16` sejam empacotados/publicados no release do app/overlay via CI ([build-overlays.yml](file:///data/data/com.termux/files/home/agy/OneOS/.github/workflows/build-overlays.yml) e [build-apk.yml](file:///data/data/com.termux/files/home/agy/OneOS/.github/workflows/build-apk.yml)).

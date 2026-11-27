@@ -1409,7 +1409,9 @@ if [ -f /data/guest_audio.flag ]; then
     fi
     if [ -n "$hpid" ]; then echo "$hpid" > /data/oneos_audio_hal.pid; fi
     n=0
-    while [ $n -lt 50 ] && ! service check android.hardware.audio.core.IModule/default 2>/dev/null | grep -q ": found"; do n=$((n + 1)); sleep 0.2; done
+    if [ -n "$hpid" ] || grep -rq "android\.hardware\.audio\.core" /vendor/etc/vintf /odm/etc/vintf /vendor/apex/*/etc/vintf /apex/*/etc/vintf 2>/dev/null; then
+        while [ $n -lt 50 ] && ! service check android.hardware.audio.core.IModule/default 2>/dev/null | grep -q ": found"; do n=$((n + 1)); sleep 0.2; done
+    fi
     echo "[Pivoted Root] audio HAL IModule/default:$(service check android.hardware.audio.core.IModule/default 2>/dev/null | cut -d: -f2) after $((n / 5))s"
     # The record above ran while the full launch's own HAL restart (oneos_switch.sh)
     # may not have registered the module yet; record the pid now that it is up, so
@@ -1604,18 +1606,22 @@ if [ -f /data/guest_audio.flag ]; then
                 [ -n "$pkg" ] || continue
                 o=$(/system/bin/sh /data/oneos_genv.sh /system/bin/cmd appops set "$pkg" RECORD_AUDIO_HOTWORD deny 2>&1) ||
                     o=$(/system/bin/sh /data/oneos_genv.sh /system/bin/cmd appops set "$pkg" RECORD_AUDIO_HOTWORD ignore 2>&1)
+                /system/bin/sh /data/oneos_genv.sh /system/bin/cmd appops set "$pkg" RECEIVE_SANDBOX_TRIGGER_AUDIO deny >/dev/null 2>&1 || true
                 /system/bin/sh /data/oneos_genv.sh /system/bin/am force-stop "$pkg" >/dev/null 2>&1
                 echo "$pkg(${o:-ok})"
-            done | tr "\n" " " | cut -c1-160
+            done | tr "\n" " " | cut -c1-240
         }
         last_hw=0
         hw_cnt=0
         hotword_off() {
-            [ $hw_cnt -lt 5 ] || return 1
+            [ $hw_cnt -lt 20 ] || return 1
             now_hw=$(date +%s)
-            [ $((now_hw - last_hw)) -ge 20 ] || return 1
+            cd_hw=20
+            [ $hw_cnt -ge 3 ] && cd_hw=60
+            [ $((now_hw - last_hw)) -ge $cd_hw ] || return 1
             why_hw=""
             t=""
+            st=""
             if [ "${1:-all}" = all ] && logcat -d -b crash -t 100 2>/dev/null | grep -q "(vts_load_sound_model+"; then
                 why_hw="vts_load_sound_model"
             else
@@ -1631,9 +1637,11 @@ if [ -f /data/guest_audio.flag ]; then
             hw_cnt=$((hw_cnt + 1))
             extras=""
             if [ -n "$t" ]; then
-                extras=$(echo "$t" | sed -n "s/.*ATTACH \[client= \"\([A-Za-z0-9_.]*[A-Za-z_]\)[0-9]*\(trusted\)\{0,1\}\".*/\1/p" | grep -vxE "null|com\.google\.android\.googlequicksearchbox|com\.android\.hotwordenrollment\.(ok|x)google" | sort -u | tr "\n" " ")
+                # Query SoundTriggerMiddlewareLogging separately so PAL:I bursts never evict ATTACH lines.
+                st=$(logcat -d -b main -t 50 -s "SoundTriggerMiddlewareLogging:I" "*:S" 2>/dev/null)
+                extras=$(printf "%s\n%s\n" "$st" "$t" | sed -n "s/.*ATTACH \[client= \"\([A-Za-z0-9_.]*[A-Za-z_]\)[0-9]*\(trusted\)\{0,1\}\".*/\1/p" | grep -vxE "null|com\.google\.android\.googlequicksearchbox|com\.android\.hotwordenrollment\.(ok|x)google|com\.samsung\.android\.bixby\.(wakeup|agent)|com\.samsung\.android\.intellivoiceservice|com\.google\.android\.as(\.oss)?" | sort -u | tr "\n" " ")
             fi
-            res=$(block_hw com.google.android.googlequicksearchbox com.android.hotwordenrollment.okgoogle com.android.hotwordenrollment.xgoogle $extras)
+            res=$(block_hw com.google.android.googlequicksearchbox com.android.hotwordenrollment.okgoogle com.android.hotwordenrollment.xgoogle com.samsung.android.bixby.wakeup com.samsung.android.bixby.agent com.samsung.android.intellivoiceservice com.google.android.as com.google.android.as.oss $extras)
             echo "$(date +%T) audio HAL hit sound trigger failure ($why_hw): DSP hotword off [$res]" | tee -a /data/oneos_hotword_off.log
             return 0
         }
@@ -4038,10 +4046,24 @@ if [ "${ONEOS_GUEST_PREVENT_HOTWORD:-1}" = 1 ] || [ "${ONEOS_DEFER_BG_DEXOPT:-1}
                 if [ "$prev_hw" = 1 ]; then
                     if [ "$(getprop ro.soc.manufacturer)" = QTI ] || [ "$force_hw" = 1 ]; then
                         apply_hw_preblock() {
-                            for hw in com.google.android.googlequicksearchbox com.android.hotwordenrollment.okgoogle com.android.hotwordenrollment.xgoogle; do
+                            for hw in \
+                                com.google.android.googlequicksearchbox \
+                                com.android.hotwordenrollment.okgoogle \
+                                com.android.hotwordenrollment.xgoogle \
+                                com.samsung.android.bixby.wakeup \
+                                com.samsung.android.bixby.agent \
+                                com.samsung.android.intellivoiceservice \
+                                com.google.android.as \
+                                com.google.android.as.oss; do
                                 out=$(/system/bin/sh /data/oneos_genv.sh /system/bin/cmd appops set "$hw" RECORD_AUDIO_HOTWORD deny 2>&1) ||
                                     out=$(/system/bin/sh /data/oneos_genv.sh /system/bin/cmd appops set "$hw" RECORD_AUDIO_HOTWORD ignore 2>&1 || true)
-                                echo "$(date +%T) preblock $hw: ${out:-ok}" >> /data/oneos_hotword_preblock.log
+                                /system/bin/sh /data/oneos_genv.sh /system/bin/cmd appops set "$hw" RECEIVE_SANDBOX_TRIGGER_AUDIO deny >/dev/null 2>&1 || true
+                                case "$hw" in
+                                    com.samsung.android.bixby.wakeup|com.android.hotwordenrollment.*)
+                                        /system/bin/sh /data/oneos_genv.sh /system/bin/am force-stop "$hw" >/dev/null 2>&1 || true
+                                        ;;
+                                esac
+                                echo "$(date +%T) preblock $hw (use_mock_hal=$(getprop debug.soundtrigger_middleware.use_mock_hal 2>/dev/null)): ${out:-ok}" >> /data/oneos_hotword_preblock.log
                             done
                         }
                         apply_hw_preblock

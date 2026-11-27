@@ -281,6 +281,29 @@ done
 # alone too, but only once One UI's framework is stopped).
 [ "$(awk '$2 == "vold_patched" { v = 1 } $2 == "service.incremental_patched.so" { i = 1 } END { print v + i }' "$STAGE/guards.txt")" = 1 ] &&
     refuse "guards.txt lists only one of vold_patched and service.incremental_patched.so (a half-built set)"
+# Host screen lock / biometric protection (Phase 4): never clear or modify host
+# locksettings / Weaver SP blobs / QBT2608 fingerprint state before switching.
+# Require explicit gatekeeper, weaver, and biometric isolation guards whenever a
+# host lock or fingerprint enrollment is present unless ONEOS_ALLOW_UNGUARDED_LOCK=1.
+HOST_LOCK_ACTIVE=0
+HOST_FP_ACTIVE=0
+for p in /data/system/gatekeeper.*.key /data/system_de/0/spblob/*; do
+    [ -e "$p" ] && HOST_LOCK_ACTIVE=1 && break
+done
+for p in /data/system/users/0/settings_fingerprint*.xml /data/vendor_de/0/fpdata/*; do
+    [ -e "$p" ] && { HOST_LOCK_ACTIVE=1; HOST_FP_ACTIVE=1; break; }
+done
+if [ "$HOST_LOCK_ACTIVE" = 1 ] && [ "${ONEOS_ALLOW_UNGUARDED_LOCK:-0}" != 1 ]; then
+    for t in gatekeeper weaver biometric; do
+        grep '^#' "$STAGE/guards.txt" 2>/dev/null | grep -qw "$t" ||
+            refuse "Host lock/biometrics active: guards.txt lacks the $t guard (ONEOS_ALLOW_UNGUARDED_LOCK=1 overrides)"
+    done
+    if [ "$HOST_FP_ACTIVE" = 1 ] && [ "${ONEOS_GUEST_BIOMETRICS:-1}" = 1 ]; then
+        grep -q '^# biometric-remove guard' "$STAGE/guards.txt" 2>/dev/null ||
+            refuse "Host fingerprints active: guards.txt lacks '# biometric-remove guard' (ONEOS_GUEST_BIOMETRICS=0 or ONEOS_ALLOW_UNGUARDED_LOCK=1)"
+    fi
+    echo "Host lock guard: verified gatekeeper/weaver/biometric isolation; keeping host PIN/pattern and fingerprints untouched"
+fi
 # The /data bridges (bridges.sh) and their floor, as guest_prepare.sh needs
 # them; nothing may be left mounted under the stage or bridged from a session
 # that never returned (the return reboots, which removes them).
@@ -504,9 +527,12 @@ host_state() {
     f=$(cat "$STAGE/host_frp_pst" 2>/dev/null); [ -n "$f" ] || f=$(getprop ro.frp.pst)
     f=$(readlink -f "$f" 2>/dev/null)
     [ -b "$f" ] && echo "frp $(sha256sum "$f" 2>/dev/null | cut -d' ' -f1)"
-    for p in /data/misc/gatekeeper /data/apex/active /data/apex/sessions; do
+    for p in /data/misc/gatekeeper /data/system_de/0/spblob /data/vendor_de/0/fpdata /data/apex/active /data/apex/sessions; do
         [ -d "$p" ] && find "$p" -type f -exec stat -c '%n %s %Y' {} + 2>/dev/null | sort
     done
+    for p in /data/system/locksettings.db /data/system/gatekeeper.*.key /data/system/users/0/settings_fingerprint*.xml; do
+        [ -f "$p" ] && stat -c '%n %s %Y' "$p" 2>/dev/null
+    done | sort
 }
 echo "preflight: host state start $(date +%T)"
 host_state > "$STAGE/host_state.before"
@@ -1075,6 +1101,7 @@ if [ "${ONEOS_LOGCAT:-1}" = 1 ]; then
         SecVibrator-HAL-AIDL-CORE:V AHAL_StreamOut_QTI:D EffectOffloadImpl:V AHAL_EffectFactoryQti:V \
         AHAL_DlbSpatializerEffectImpl:V DlbDap2Process:V \
         AudioFlinger:W APM_AudioPolicyManager:W AHAL:W AHAL_ModulePrimary:W AHAL_StreamPrimary_exynos:W \
+        PAL:E COSR:I SoundTriggerMiddlewareLogging:I \
         audio_hw_primary:W audio_hw_proxy2:E bluetooth-a2dp:W A2dpStateMachine:I A2dpService:I \
         BTAudioProviderStub_2_1:I BTAudioProviderA2dpSoftware:W </dev/null >/dev/null 2>&1 &
     echo $! > "$STAGE/sound_watch.pid"
@@ -4650,8 +4677,10 @@ if [ $HEAT_CAP = 1 ] || [ $GUEST_THERMAL_MAP = 1 ]; then
     echo \$\$ > /sys/fs/cgroup/cgroup.procs 2>/dev/null
     F=$STAGE/heat_cap.log
     CFL=/sys/devices/system/cpu/cpufreq_limit/cpufreq_max_limit
+    GMF=/sys/class/kgsl/kgsl-3d0/devfreq/max_freq
+    GAF=/sys/class/kgsl/kgsl-3d0/devfreq/available_frequencies
     if [ $HEAT_CAP = 1 ]; then
-        echo \"# \$(date) OneOS heat cap: from 45, 47, 50 C skin every CPU policy at 80, 65, 50% of its top clock (2 C hysteresis); charging with the screen on, from 52, 56 C direct charger 80, 65%\" > \$F
+        echo \"# \$(date) OneOS heat cap: from 43, 46, 49 C skin asymmetric CPU (little 95/85/75%, big/prime 85/70/55%, 2 C hysteresis) + KGSL GPU 80/65% at level 2-3; charging with screen on, from 46, 50 C direct charger level 1, 2\" > \$F
         if [ \"$HOST_LOW_POWER\" = 0 ] && [ -w \$CFL ]; then
             v=\$(cat \$CFL 2>/dev/null)
             if [ -n \"\$v\" ] && [ \"\$v\" != -1 ]; then
@@ -4662,7 +4691,17 @@ if [ $HEAT_CAP = 1 ] || [ $GUEST_THERMAL_MAP = 1 ]; then
     else
         echo \"# \$(date) OneOS heat cap off (Cool down when hot): the guest thermal status only\" > \$F
     fi
-    [ $GUEST_THERMAL_MAP = 1 ] && echo \"# guest thermal status from skin: NONE, LIGHT 47, MODERATE 50, SEVERE 53, the HAL status from 56 C (1 C hysteresis)\" >> \$F
+    [ $GUEST_THERMAL_MAP = 1 ] && echo \"# guest thermal status from skin: NONE, LIGHT 45, MODERATE 48, SEVERE 51, the HAL status from 55 C (1 C hysteresis)\" >> \$F
+    gc=0; ghw=''
+    [ -w \$GMF ] && [ -r \$GAF ] && ghw=\$(tr ' ' '\\n' < \$GAF 2>/dev/null | sort -rn | head -n 1)
+    case \"\$ghw\" in ''|*[!0-9]*) ghw='' ;; esac
+    min_hw=''; max_hw=''
+    for p in /sys/devices/system/cpu/cpufreq/policy*; do
+        hw=\$(cat \$p/cpuinfo_max_freq 2>/dev/null)
+        case \"\$hw\" in ''|*[!0-9]*) continue ;; esac
+        [ -z \"\$min_hw\" ] || [ \$hw -lt \$min_hw ] && min_hw=\$hw
+        [ -z \"\$max_hw\" ] || [ \$hw -gt \$max_hw ] && max_hw=\$hw
+    done
     full() {
         c=''
         if [ \"$HOST_LOW_POWER\" = 0 ] && [ -w \$CFL ] && [ \"\$(cat \$CFL 2>/dev/null)\" != -1 ]; then
@@ -4676,6 +4715,12 @@ if [ $HEAT_CAP = 1 ] || [ $GUEST_THERMAL_MAP = 1 ]; then
             echo \$hw > \$p/scaling_max_freq 2>/dev/null
             c=\"\$c \${p##*/}=\$(cat \$p/scaling_max_freq 2>/dev/null)/\$hw\"
         done
+        if [ \"\$gc\" = 1 ] && [ -n \"\$ghw\" ] && [ -w \$GMF ]; then
+            echo \$ghw > \$GMF 2>/dev/null
+            gc=0
+            rm -f $STAGE/gpu_cap.active
+            c=\"\$c gpu=\$(cat \$GMF 2>/dev/null)/\$ghw\"
+        fi
         echo \"\$(date +%T) \$1: full clock:\$c\" >> \$F
     }
     lvl=0; chl=0; first=1; tl=-1; lp=''
@@ -4691,7 +4736,7 @@ if [ $HEAT_CAP = 1 ] || [ $GUEST_THERMAL_MAP = 1 ]; then
         if [ -n \"\$sk\" ] && [ $GUEST_THERMAL_MAP = 1 ]; then
             [ \"\$P\" = \"\$lp\" ] || tl=-1
             lp=\$P
-            nt=\$(awk -v s=\"\$sk\" -v l=\$tl 'BEGIN { t[1] = 47; t[2] = 50; t[3] = 53; t[4] = 56; if (l < 0) l = 0; while (l < 4 && s >= t[l + 1]) l++; while (l > 0 && s < t[l] - 1) l--; print l }')
+            nt=\$(awk -v s=\"\$sk\" -v l=\$tl 'BEGIN { t[1] = 45; t[2] = 48; t[3] = 51; t[4] = 55; if (l < 0) l = 0; while (l < 4 && s >= t[l + 1]) l++; while (l > 0 && s < t[l] - 1) l--; print l }')
             if [ \"\$nt\" != \"\$tl\" ]; then
                 if [ \"\$nt\" = 4 ]; then a=reset; w=\"the HAL status again\"; else a=\"override-status \$nt\"; w=\$nt; fi
                 r=\$(timeout 10 $BB nsenter -t \$P -m /system/bin/sh /data/oneos_genv.sh /system/bin/cmd thermalservice \$a 2>&1 | head -n 2 | tr '\\n' ' ')
@@ -4700,18 +4745,15 @@ if [ $HEAT_CAP = 1 ] || [ $GUEST_THERMAL_MAP = 1 ]; then
             fi
         fi
         if [ -n \"\$sk\" ] && [ $HEAT_CAP = 1 ]; then
-            new=\$(awk -v s=\"\$sk\" -v l=\$lvl 'BEGIN { t[1] = 45; t[2] = 47; t[3] = 50; while (l < 3 && s >= t[l + 1]) l++; while (l > 0 && s < t[l] - 2) l--; print l }')
-            # 0.5.31: charging with the screen on (owner's A36, HyperOS, 45 W: 0.6-1.6 A into the battery while in use,
-            # the direct charger at 47-52 C; One UI charges much faster in use). One UI's SSRM holds the clocks back
-            # while charging; here the direct charger's temperature (battery/dchg_temp, 0.1 C) sets a level too:
-            # from 44 C 80%, from 48 C 65% (2 C hysteresis). The stricter of the two levels applies.
+            new=\$(awk -v s=\"\$sk\" -v l=\$lvl 'BEGIN { t[1] = 43; t[2] = 46; t[3] = 49; while (l < 3 && s >= t[l + 1]) l++; while (l > 0 && s < t[l] - 2) l--; print l }')
+            # Charging with the screen on: direct charger temperature (battery/dchg_temp, 0.1 C) sets level 1 at 46 C, level 2 at 50 C (2 C hysteresis).
             ch=0; dt=0
             if [ \"\$(cat /sys/class/power_supply/battery/status 2>/dev/null)\" = Charging ]; then
                 dt=\$(cat /sys/class/power_supply/battery/dchg_temp 2>/dev/null)
                 case \"\$dt\" in ''|*[!0-9]*) dt=0 ;; esac
                 on=0
                 for b in /sys/class/backlight/*/brightness; do v=\$(cat \$b 2>/dev/null); case \"\$v\" in ''|0|*[!0-9]*) ;; *) on=1 ;; esac; done
-                [ \$on = 1 ] && [ \$dt -gt 0 ] && ch=\$(awk -v d=\$dt -v l=\$chl 'BEGIN { t[1] = 520; t[2] = 560; while (l < 2 && d >= t[l + 1]) l++; while (l > 0 && d < t[l] - 20) l--; print l }')
+                [ \$on = 1 ] && [ \$dt -gt 0 ] && ch=\$(awk -v d=\$dt -v l=\$chl 'BEGIN { t[1] = 460; t[2] = 500; while (l < 2 && d >= t[l + 1]) l++; while (l > 0 && d < t[l] - 20) l--; print l }')
             fi
             chl=\$ch
             [ \$ch -gt \$new ] && new=\$ch && sk=\"\$sk (charging, direct charger \$((dt / 10)))\"
@@ -4725,24 +4767,42 @@ if [ $HEAT_CAP = 1 ] || [ $GUEST_THERMAL_MAP = 1 ]; then
             elif [ \"\$new\" = 0 ] && [ \$lvl != 0 ]; then
                 full \"skin \$sk C, level \$lvl to 0\"
             elif [ \"\$new\" != 0 ] && [ \"\$new\" != \$lvl ]; then
-                case \$new in 1) pct=80 ;; 2) pct=65 ;; *) pct=50 ;; esac
+                case \$new in 1) lpct=95; bpct=85; gpct=100 ;; 2) lpct=85; bpct=70; gpct=80 ;; *) lpct=75; bpct=55; gpct=65 ;; esac
                 c=''
                 for p in /sys/devices/system/cpu/cpufreq/policy*; do
                     hw=\$(cat \$p/cpuinfo_max_freq 2>/dev/null)
                     case \"\$hw\" in ''|*[!0-9]*) continue ;; esac
+                    pct=\$bpct
+                    if [ -n \"\$min_hw\" ] && [ -n \"\$max_hw\" ] && [ \$((max_hw - min_hw)) -ge 300000 ] && [ \$hw -le \$((min_hw + 150000)) ]; then
+                        pct=\$lpct
+                    fi
                     echo \$((hw / 100 * pct)) > \$p/scaling_max_freq 2>/dev/null
-                    c=\"\$c \${p##*/}=\$(cat \$p/scaling_max_freq 2>/dev/null)/\$hw\"
+                    c=\"\$c \${p##*/}=\$(cat \$p/scaling_max_freq 2>/dev/null)/\$hw(\$pct%)\"
                 done
-                echo \"\$(date +%T) skin \$sk C, level \$lvl to \$new: \$pct%:\$c\" >> \$F
+                if [ -n \"\$ghw\" ] && [ -w \$GMF ]; then
+                    if [ \$gpct -lt 100 ]; then
+                        gt=\$((ghw / 100 * gpct))
+                        gf=\$(tr ' ' '\\n' < \$GAF 2>/dev/null | awk -v m=\$gt '\$1 ~ /^[0-9]+$/ && \$1 <= m { if (\$1 > b) b = \$1 } END { print b }')
+                        gc_now=\$(cat \$GMF 2>/dev/null)
+                        if [ -n \"\$gf\" ] && [ -n \"\$gc_now\" ] && [ \$gc_now -gt \$gf ]; then
+                            echo \$gf > \$GMF 2>/dev/null && gc=1 && echo \"\$ghw\" > $STAGE/gpu_cap.active
+                            c=\"\$c gpu=\$(cat \$GMF 2>/dev/null)/\$ghw(\$gpct%)\"
+                        fi
+                    elif [ \"\$gc\" = 1 ]; then
+                        echo \$ghw > \$GMF 2>/dev/null && gc=0 && rm -f $STAGE/gpu_cap.active
+                        c=\"\$c gpu=\$(cat \$GMF 2>/dev/null)/\$ghw\"
+                    fi
+                fi
+                echo \"\$(date +%T) skin \$sk C, level \$lvl to \$new:\$c\" >> \$F
             fi
             lvl=\$new; first=0
         fi
         sleep 10
     done
 " </dev/null >/dev/null 2>&1 &
-    [ $HEAT_CAP = 1 ] && echo "Heat cap: on (from 45 C skin; every 10 s to $STAGE/heat_cap.log)"
+    [ $HEAT_CAP = 1 ] && echo "Heat cap: on (from 43 C skin; every 10 s to $STAGE/heat_cap.log)"
     [ $HEAT_CAP = 1 ] || echo "Heat cap: off (ONEOS_HEAT_CAP=0, Cool down when hot off in Advanced)"
-    [ $GUEST_THERMAL_MAP = 1 ] && echo "Guest thermal status: from the skin temperature, the HAL status from 56 C ($STAGE/heat_cap.log)"
+    [ $GUEST_THERMAL_MAP = 1 ] && echo "Guest thermal status: from the skin temperature, the HAL status from 55 C ($STAGE/heat_cap.log)"
 else
     echo "Heat cap: off (ONEOS_HEAT_CAP=0, Cool down when hot off in Advanced); guest thermal status: the HAL's"
 fi

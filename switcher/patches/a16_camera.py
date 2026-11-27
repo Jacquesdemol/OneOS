@@ -67,8 +67,10 @@ def patch_capture_result_extras(root, orig):
         sys.exit("a16_camera: CaptureResultExtras.readFromParcel(Parcel) not found")
     body = m_method.group(1)
     patched_body, n = MULTI_RES_READ_RE.subn(
-        r'\1# OneOS: One UI 8/8.5 cameraserver (Android 16) does not write MultiResConcurrentReadersStartInfo[].\n'
+        r'\1# OneOS: One UI 8/8.5 cameraserver (Android 16) does not write MultiResConcurrentReadersStartInfo[];\n'
+        r'\1# initialize to an empty array so sendOnMultiResolutionOutputStarted never dereferences null.\n'
         r'\1const/4 \2, 0x0\n\n'
+        r'\1new-array \2, \2, [Landroid/hardware/camera2/impl/MultiResConcurrentReadersStartInfo;\n\n'
         r'\1iput-object \2, p0, Landroid/hardware/camera2/impl/CaptureResultExtras;->multiResConcurrentReadersStartInfo:[Landroid/hardware/camera2/impl/MultiResConcurrentReadersStartInfo;',
         body,
     )

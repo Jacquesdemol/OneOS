@@ -325,7 +325,14 @@ if [ -f $S/heat_cap.active ]; then
         echo "$hw" > "$p/scaling_max_freq" 2>/dev/null
         hc="$hc ${p##*/}=$(cat "$p/scaling_max_freq" 2>/dev/null)/$hw"
     done
-    rm -f $S/heat_cap.active
+    if [ -f $S/gpu_cap.active ] && [ -w /sys/class/kgsl/kgsl-3d0/devfreq/max_freq ]; then
+        ghw=$(cat $S/gpu_cap.active 2>/dev/null)
+        case "$ghw" in ''|*[!0-9]*) ;; *)
+            echo "$ghw" > /sys/class/kgsl/kgsl-3d0/devfreq/max_freq 2>/dev/null
+            hc="$hc gpu=$(cat /sys/class/kgsl/kgsl-3d0/devfreq/max_freq 2>/dev/null)/$ghw" ;;
+        esac
+    fi
+    rm -f $S/heat_cap.active $S/gpu_cap.active
     echo "Heat cap: stopped, CPU policies at full clock:$hc"
 fi
 
@@ -548,9 +555,12 @@ host_state() {
     f=$(cat "$S/host_frp_pst" 2>/dev/null); [ -n "$f" ] || f=$(getprop ro.frp.pst)
     f=$(readlink -f "$f" 2>/dev/null)
     [ -b "$f" ] && echo "frp $(sha256sum "$f" 2>/dev/null | cut -d' ' -f1)"
-    for p in /data/misc/gatekeeper /data/apex/active /data/apex/sessions; do
+    for p in /data/misc/gatekeeper /data/system_de/0/spblob /data/vendor_de/0/fpdata /data/apex/active /data/apex/sessions; do
         [ -d "$p" ] && find "$p" -type f -exec stat -c '%n %s %Y' {} + 2>/dev/null | sort
     done
+    for p in /data/system/locksettings.db /data/system/gatekeeper.*.key /data/system/users/0/settings_fingerprint*.xml; do
+        [ -f "$p" ] && stat -c '%n %s %Y' "$p" 2>/dev/null
+    done | sort
 }
 if [ -f "$S/host_state.before" ]; then
     host_state > "$S/host_state.after"

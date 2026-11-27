@@ -205,6 +205,9 @@ object StageCheck : BackgroundJob<StageCheck.State>(State(), "oneos-check") {
             st.staged(profile)?.second?.let { AppAssets.expectedStageHashes(app, it, profile!!.id) }.orEmpty()
         }
         val expected = expectedResult.getOrDefault(emptyMap())
+        val lockIsolated = st.staged(profile)?.second?.let {
+            profile?.id?.let { pid -> AppAssets.hasLockIsolationGuards(app, it, pid) }
+        } == true
         val input = GateInput(
             facts = facts,
             screenLockSet = screenLock,
@@ -221,6 +224,7 @@ object StageCheck : BackgroundJob<StageCheck.State>(State(), "oneos-check") {
             uncollectedLogs = launch != null && !launch.logsCollected && launch.endedSince(),
             zygiskNextVersionCode = st.props["zygisksu.versionCode"]?.trim()?.toIntOrNull(),
             series = ApkSeries.byId(BuildConfig.SERIES),
+            lockIsolatedByGuards = lockIsolated,
         )
         val report = SwitchGates.evaluate(phase, input)
         // Only a contributor channel's snapshot can stop being valid (another app version); Stable keeps the old check.

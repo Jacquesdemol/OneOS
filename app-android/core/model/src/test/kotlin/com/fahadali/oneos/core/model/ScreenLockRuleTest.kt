@@ -49,6 +49,22 @@ class ScreenLockRuleTest {
     }
 
     @Test
+    fun switchGateAllowsGuardedLockWithoutClearingHostState() {
+        val guarded = ScreenLockRule.switchGate(deviceSecure = true, allowed = false, isolatedByGuards = true)
+        assertEquals(Level.WARN, guarded.level)
+        assertEquals(ScreenLockRule.R_SET_ISOLATED, guarded.reason)
+
+        val unguarded = ScreenLockRule.switchGate(deviceSecure = true, allowed = false, isolatedByGuards = false)
+        assertEquals(Level.BLOCK, unguarded.level)
+        assertEquals(ScreenLockRule.R_SET, unguarded.reason)
+
+        // Unknown lock state stays blocked even when guards are present.
+        val unknown = ScreenLockRule.switchGate(deviceSecure = null, allowed = true, isolatedByGuards = true)
+        assertEquals(Level.BLOCK, unknown.level)
+        assertEquals(ScreenLockRule.R_UNKNOWN, unknown.reason)
+    }
+
+    @Test
     fun blockStillWinsOverTheScreenLockWarning() {
         val r = CompatEvaluator.evaluate(Fixtures.facts(screenLock = true, abis64 = emptyList()))
         assertEquals(Verdict.NOT_SUPPORTED, r.verdict)

@@ -19,5 +19,7 @@ b07ef781765d2f25cd0c7d76f79817500e1c238a32d9891c8990f900687fb956  framework_patc
 6ff8de9fd13739384dc426e7be7571ce39fcb945e4f089e22f1b6740bd442d39  telephony-common_patched.jar
 23d98173e40ce788bc66d4a9678d06869fe5010ade40f001128b30c17ea57e7a  libcamera_client_patched.so
 720014ae5f57472b16183a563e1761798df3369a9dabe48a834158a5e2a9ce40  libcameracompatbilityinfo_patched.so
-0dfe4ab44690dd403deab1f3f46a991fd2f0aac52dbdb96be87656c4ad583333  framework_patched_oneui8.jar
-5c59aa4e9bb837643d9051c122af199c3b74bb43b17ec0bcf0435baf0c6abd59  framework_patched_oneui85.jar
+# r7 (0.5.39): framework_patched_oneui8.jar, framework_patched.jar with One UI 8's camera codes (switcher/patches/a16_camera.py, host_camera_oneui8.txt; guest_prepare.sh binds it on a One UI 8 phone and turns the camera on; empty MultiResConcurrentReadersStartInfo[] init)
+6e4081527d3085a3f9d352bf0ac63fb2c736d671897b52d0f2cd9c0767b1a92d  framework_patched_oneui8.jar
+# 0.5.45 (oneui95_a16_r9): framework_patched_oneui85.jar, framework_patched.jar with One UI 8.5's camera codes (switcher/patches/a16_camera.py with ONEOS_A16_CAMERA_HOST=oneui85, host_camera_oneui85.txt: One UI 8's numbering, CameraCompatibilityInfo as One UI 9.0 writes it; empty MultiResConcurrentReadersStartInfo[] init)
+b44ee65e2914beaf6a694fa69de359b82cb66ea3915717382e15bc76b0a12de1  framework_patched_oneui85.jar

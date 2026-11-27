@@ -2116,6 +2116,7 @@ ro.miui.backdrop_sampling_enabled=true"
             echo "guest_props: $key=false for the session (the guest never drives One UI's composd)"
     fi
     # Cap dex2oat threads, heap, and CPU affinity during guest boot/background compilation to prevent -j8 CPU/swap thrash (kswapd0).
+    # Keep background compilation on LITTLE cores while allowing boot/foreground dex2oat onto LITTLE+mid cores (leaving prime free).
     # Recorded in OVR/ADDED so `remove` restores One UI's exact host values on return.
     if [ "${ONEOS_DEX2OAT_BOOT_CAP:-1}" = 1 ]; then
         DEX_CPU_SET=""
@@ -2126,13 +2127,21 @@ ro.miui.backdrop_sampling_enabled=true"
             [0-9]*,[0-9]*) ;;
             *) DEX_CPU_SET="0,1,2,3" ;;
         esac
+        FG_DEX_CPU_SET="$DEX_CPU_SET"
+        MID_CPU_SET=""
+        if [ -r /sys/devices/system/cpu/cpufreq/policy4/related_cpus ] && [ -d /sys/devices/system/cpu/cpufreq/policy7 ]; then
+            MID_CPU_SET=$(tr ' ' ',' < /sys/devices/system/cpu/cpufreq/policy4/related_cpus 2>/dev/null | sed 's/,$//')
+        fi
+        case "$MID_CPU_SET" in
+            [0-9]*) FG_DEX_CPU_SET="$DEX_CPU_SET,$MID_CPU_SET" ;;
+        esac
         for pair in \
             "dalvik.vm.boot-dex2oat-threads=2" \
             "dalvik.vm.dex2oat-threads=2" \
             "dalvik.vm.background-dex2oat-threads=1" \
             "dalvik.vm.dex2oat-Xmx=512m" \
             "dalvik.vm.dex2oat-minidebuginfo=false" \
-            "dalvik.vm.dex2oat-cpu-set=$DEX_CPU_SET" \
+            "dalvik.vm.dex2oat-cpu-set=$FG_DEX_CPU_SET" \
             "dalvik.vm.background-dex2oat-cpu-set=$DEX_CPU_SET" \
             "pm.dexopt.bg-dexopt=speed-profile"; do
             key=${pair%%=*}; val=${pair#*=}
@@ -2145,6 +2154,22 @@ ro.miui.backdrop_sampling_enabled=true"
             fi && "$RP" -n "$key" "$val" 2>/dev/null &&
                 echo "guest_props: $key=$val for the session (host: ${h:-unset})"
         done
+    fi
+    # QTI PAL StreamSoundTrigger crashes msm/adsp/audio_pd (va-mic-mono-lpi) across lock/unlock
+    # transitions; keep soundtrigger_middleware up on AOSP's FakeSoundTriggerHal (mock version 1
+    # skips DefaultHalFactory so FakeHalFactory serves STHAL in-memory without touching ADSP).
+    if { [ "$(getprop ro.soc.manufacturer)" = QTI ] || [ "${ONEOS_FORCE_PREVENT_HOTWORD:-0}" = 1 ]; } &&
+       [ "${ONEOS_GUEST_PREVENT_HOTWORD:-1}" = 1 ]; then
+        key=debug.soundtrigger_middleware.use_mock_hal
+        h=$(getprop "$key")
+        if [ "$h" != 1 ]; then
+            if getprop | grep -qF "[$key]: ["; then
+                printf '%s=%s\n' "$key" "$h" >> "$OVR"
+            else
+                printf '%s\n' "$key" >> "$ADDED"
+            fi && "$RP" -n "$key" 1 2>/dev/null &&
+                echo "guest_props: $key=1 for the session (QTI ADSP SoundTrigger guard; host: ${h:-unset})"
+        fi
     fi
     ;;
 remove)

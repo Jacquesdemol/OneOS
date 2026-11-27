@@ -144,9 +144,7 @@ data class PackageSet(
         }
         for (n in guards.entries.keys) if (n !in jars) p += "guards.txt: $n is not a guard jar of $id"
         if (file(PackageSets.GMS_PAYLOAD) != null) {
-            // As the scripts read them: any comment line, whole words (grep -w).
-            val words = guardsText.lineSequence().map { it.removeSuffix("\r") }.filter { it.startsWith("#") }
-                .flatMap { it.split(Regex("[^A-Za-z0-9_]+")) }.toSet()
+            val words = PackageSets.commentWords(guardsText)
             for (t in PackageSets.GMS_GUARDS) if (t !in words) p += "guards.txt does not name the $t guard Google services need"
         }
         return p
@@ -219,6 +217,24 @@ object PackageSets {
      * UI's, and guest apps get app ids from 15000.
      */
     val GMS_GUARDS: List<String> = listOf("gatekeeper", "pdb", "apexd", "appid15000")
+
+    /**
+     * Guards guards.txt's comment lines must declare before switching safely
+     * while One UI has a PIN, pattern, password, or biometric lock set: Gatekeeper HAL,
+     * Weaver SP protectors, and biometric removal remain isolated from One UI.
+     */
+    val LOCK_ISOLATION_GUARDS: List<String> = listOf("gatekeeper", "weaver", "biometric")
+
+    /** Whole identifier words declared on `#` comment lines in `guards.txt` (matches `grep -w`). */
+    fun commentWords(guardsText: String): Set<String> =
+        guardsText.lineSequence().map { it.removeSuffix("\r") }.filter { it.startsWith("#") }
+            .flatMap { it.split(Regex("[^A-Za-z0-9_]+")) }.toSet()
+
+    /** True when `guards.txt` comments declare all [LOCK_ISOLATION_GUARDS]. */
+    fun hasLockIsolationGuards(guardsText: String): Boolean {
+        val words = commentWords(guardsText)
+        return LOCK_ISOLATION_GUARDS.all { it in words }
+    }
 
     /** The APEX payloads every set carries (guest_prepare.sh mounts each one). */
     private val COMMON_PAYLOADS: List<String> = listOf(

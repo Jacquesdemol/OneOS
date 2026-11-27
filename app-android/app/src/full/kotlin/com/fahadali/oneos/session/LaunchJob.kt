@@ -172,10 +172,10 @@ object LaunchJob : BackgroundJob<LaunchJob.State>(State(), "oneos-launch") {
     private fun run(app: Context, dryRun: Boolean, ticked: Set<String>, hideGms: Boolean, secIms: Boolean, edmStub: Boolean, guard: com.fahadali.oneos.core.model.LaunchCommitGuard) {
         if (guard.isCancelled()) throw Cancelled()
         val lock = FactProbe.screenLockSet(app)
-        // 0.4.32: a lock set may be the owner's choice (Advanced). Not being able to
-        // read the lock state never is, so null still stops here.
+        // Unreadable lock state always stays fail-closed; an active lock is checked
+        // against StageCheck's isolation guards (or the Advanced override) below.
         val allowLock = SessionPrefs.allowScreenLock(app)
-        if (lock == null || (lock && !allowLock)) throw lockRefusal(lock, allowLock)
+        if (lock == null) throw lockRefusal(null, allowLock)
         // The last check when it is fresh and complete (installd read); else this job's own, published for Home.
         val last = StageCheck.state.result?.takeIf { it.ageMs <= StageCheck.FRESH_MS && it.installd != null }
         val fresh = if (last == null) {

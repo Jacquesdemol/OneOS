@@ -129,6 +129,13 @@ object AppAssets {
     /** The Android version of [set]'s image (37 when the image is unknown). */
     private fun sdkOf(set: PackageSet): Int = Images.byId(set.imageId)?.sdk ?: 37
 
+    /** True when the staged `guards.txt` is readable locally and declares [PackageSets.LOCK_ISOLATION_GUARDS]. */
+    fun hasLockIsolationGuards(ctx: Context, set: PackageSet, profile: String): Boolean = runCatching {
+        val guards = files(ctx, set, profile).firstOrNull { it.name == "guards.txt" } ?: return@runCatching false
+        val text = open(ctx, guards).use { it.readBytes().toString(Charsets.UTF_8) }
+        PackageSets.hasLockIsolationGuards(text)
+    }.getOrDefault(false)
+
     /** The installd table the app ships for SDK [sdk] images (the installd gate's expected table). */
     fun hostInstalldTxt(ctx: Context, sdk: Int = 37): String {
         val name = InstalldExpected.assetName(sdk)

@@ -242,6 +242,11 @@ object Plain {
                     "You chose to switch anyway. If the phone can't take your lock afterwards, the only way back erases it.",
                     FixAction.NONE,
                 )
+                ScreenLockRule.R_SET_ISOLATED -> m(
+                    "Screen lock stays safe on One UI",
+                    "Your PIN, pattern, and fingerprints stay untouched while the other system stays isolated.",
+                    FixAction.NONE,
+                )
                 else -> m(
                     "Turn off your screen lock",
                     "Set Screen lock type to None or Swipe. OneOS can't switch while a lock is on.",
