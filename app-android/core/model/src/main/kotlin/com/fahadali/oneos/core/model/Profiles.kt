@@ -229,6 +229,8 @@ object Profiles {
     private val ONEUI95_F8_CHOICE = ImageChoice(Images.ID_ONEUI95, PackageSets.ID_ONEUI95_F8, tested = false)
     /** Tester builds: One UI 9.5 on a One UI 8 phone, with the image's own modules One UI 8 cannot lend ([PackageSets.ONEUI95_A16]). */
     private val ONEUI95_A16_CHOICE = ImageChoice(Images.ID_ONEUI95, PackageSets.ID_ONEUI95_A16, tested = false)
+    /** Tester builds: Project Infinity-X (Android 17) on a One UI 8 phone ([PackageSets.INFINITYX_A16]). */
+    private val INFINITYX_A16_CHOICE = ImageChoice(Images.ID_INFINITYX, PackageSets.ID_INFINITYX_A16, tested = false)
 
     /**
      * HyperOS (0.4.31, owner: "Allow all users to try"), made for the Z Fold8 Ultra
@@ -1483,7 +1485,7 @@ object Profiles {
                 if (it.imageId == Images.ID_ONEUI95 && it.packageSetId == PackageSets.ID_ONEUI95) it.copy(packageSetId = PackageSets.ID_ONEUI95_A16) else it
             })
             p.choices.any { it.imageId == Images.ID_ONEUI95 } -> p
-            else -> p.copy(choices = p.choices + ONEUI95_A16_CHOICE)
+            else -> p.copy(choices = p.choices + ONEUI95_A16_CHOICE + INFINITYX_A16_CHOICE)
         }
     }
 

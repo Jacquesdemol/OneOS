@@ -177,6 +177,7 @@ object PackageSets {
     const val ID_ONEUI95 = "oneui95"
     const val ID_ONEUI95_F8 = "oneui95-f8"
     const val ID_ONEUI95_A16 = "oneui95-a16"
+    const val ID_INFINITYX_A16 = "infinityx-a16"
     const val ID_OXYGEN17_PAD = "oxygen17pad"
     const val ID_PIXELOS = "pixelos"
 
@@ -1067,7 +1068,43 @@ object PackageSets {
      * too, against the One UI 9 rule (its BPF maps are One UI's loader's), as the experiment.
      */
     /** Sets only a tester build's profiles offer (no APK series packs them; a tester build packs every set). */
-    val TESTER_ONLY: Set<String> = setOf(ID_ONEUI95_A16)
+    val TESTER_ONLY: Set<String> = setOf(ID_ONEUI95_A16, ID_INFINITYX_A16)
+
+    /**
+     * Tester builds (-Poneos.a17OnA16=true): Project Infinity-X (Android 17, SDK 37) on One UI 8 phones (SDK 36).
+     * Daily set: guarded services (with AOSP storage bridge), oplus-services, framework (with One UI 8 camera codes
+     * variant toggled via ONEOS_A16_CAMERA=1, off by default), telephony-common (SMSC, error-66 & QoS compat), native
+     * camera client library, guest vold as gvld, IMS backoff, AOSP signal poll, guest app, status bar RRO, A17
+     * connectivity native library for One UI 8's tethering module, apex requirements, and 32 APEX payloads.
+     */
+    val INFINITYX_A16 = PackageSet(
+        id = ID_INFINITYX_A16,
+        imageId = Images.ID_INFINITYX,
+        sourceDir = "packages/infinityx-a16",
+        files = listOf(
+            PackageFile("services_patched.jar", FileRole.GUARD_JAR),
+            PackageFile("oplus-services_patched.jar", FileRole.GUARD_JAR),
+            PackageFile("framework_patched.jar", FileRole.GUARD_JAR),
+            PackageFile("framework_patched_oneui8.jar", FileRole.GUARD_JAR),
+            PackageFile("telephony-common_patched.jar", FileRole.GUARD_JAR),
+            PackageFile("libcamera_client_patched.so", FileRole.GUARD_LIBRARY),
+            PackageFile("vold_patched", FileRole.GUARD_EXECUTABLE),
+            PackageFile("service.incremental_patched.so", FileRole.GUARD_LIBRARY),
+            PackageFile("guards.txt", FileRole.GUARDS),
+            PackageFile("oneos-apex-requires.txt", FileRole.GUEST_FIX),
+            PackageFile("ims-ext-common_patched.jar", FileRole.FRAMEWORK_JAR),
+            PackageFile("oneos-telephony.jar", FileRole.INJECTION_JAR),
+            PackageFile("oneos-telephony.sha256", FileRole.INJECTION_SHA256),
+            PackageFile("OneOSPhoneInjection.apk", FileRole.RRO),
+            PackageFile(GUEST_APP, FileRole.GUEST_APP),
+            PackageFile("OneOSPixelStatusBar.apk", FileRole.RRO),
+            PackageFile(A17_CONNECTIVITY_NATIVE, FileRole.GUEST_FIX),
+        ) + (COMMON_PAYLOADS + listOf("bt", "nfcservices", "telephonycore", "gmssystem") + A16_EXTRA_PAYLOADS).distinct()
+            .map { PackageFile("${it}_payload.img", FileRole.APEX_PAYLOAD) },
+        omitted = listOf(TETHERING, CELLBROADCAST),
+        approxBytes = 660_185_212L,
+        hasReturnApp = true,
+    )
 
     val ONEUI95_A16 = ONEUI95.copy(
         id = ID_ONEUI95_A16,
@@ -1125,7 +1162,7 @@ object PackageSets {
         hasReturnApp = true,
     )
 
-    val ALL: List<PackageSet> = listOf(N6_GLOBAL_F8, N6_F8U, X9U_IN_1105_SULTRA, PIXEL_F8U, PIXEL_SULTRA, PIXEL_F8, PIXEL9_SULTRA, INFINITYX, HYPER_F8U, HYPER_HK, NOTHING_F8U, NOTHING_A, OXYGEN16, OXYGEN17_PAD, ORIGINOS, LINEAGE, ONEUI95, ONEUI95_F8, ONEUI95_A16, PIXELOS)
+    val ALL: List<PackageSet> = listOf(N6_GLOBAL_F8, N6_F8U, X9U_IN_1105_SULTRA, PIXEL_F8U, PIXEL_SULTRA, PIXEL_F8, PIXEL9_SULTRA, INFINITYX, INFINITYX_A16, HYPER_F8U, HYPER_HK, NOTHING_F8U, NOTHING_A, OXYGEN16, OXYGEN17_PAD, ORIGINOS, LINEAGE, ONEUI95, ONEUI95_F8, ONEUI95_A16, PIXELOS)
 
     fun byId(id: String, sets: List<PackageSet> = ALL): PackageSet? = sets.firstOrNull { it.id == id }
 }

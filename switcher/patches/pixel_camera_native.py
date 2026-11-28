@@ -48,9 +48,9 @@ import sys
 UNUSED_CODE = 200
 # Guest-only void or oneway methods (ColorOS; vivo's onFrozenPackage is oneway, flags 1).
 # One UI 9.5 (S948BXXU6ZZKN): injectSessionParamsN (9) and notifyPrewarmId (29), both void, which One UI 9.0's cameraserver does not have.
-GUEST_ONLY_VOID = {"notifySmartWindowChange", "notifyDisplayRotationChange", "onFrozenPackage", "injectSessionParamsN", "notifyPrewarmId"}
+GUEST_ONLY_VOID = {"notifySmartWindowChange", "notifyDisplayRotationChange", "onFrozenPackage", "injectSessionParamsN", "notifyPrewarmId", "warmUp"}
 # Guest-only methods with a result whose Bp returns transact's error status as it is (HyperOS; vivo).
-GUEST_ONLY_STATUS = {"addFaceListener", "removeFaceListener", "setVersionName"}
+GUEST_ONLY_STATUS = {"addFaceListener", "removeFaceListener", "setVersionName", "configureStreams", "updateOutputConfigurations"}
 # One UI 9.5: same signature as One UI 9.0's, contents its cameraserver crashes on (pixel_camera_abi.py).
 NOT_TO_HOST = {"notifyPkgListParamChange"}
 # A One UI 9.5 host (0.5.37, ONEOS_CAMERA_KEEP_COMPAT=1 builds) parses One UI 9.5's lists itself.

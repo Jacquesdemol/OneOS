@@ -26,9 +26,12 @@ object Experimental {
     /** The image's SDK it accepts there. */
     const val A17_IMAGE_SDK = 37
 
-    /** One UI 9.5 on a One UI 8 phone, in a build with [on]: the only pair the tester build lets through. */
+    /** The SDK 37 images the tester build accepts on an SDK 36 phone: One UI 9.5 and Project Infinity-X. */
+    val A17_ON_A16_IMAGES: Set<String> = setOf(Images.ID_ONEUI95, Images.ID_INFINITYX)
+
+    /** One UI 9.5 or Infinity-X on a One UI 8 phone, in a build with [on]: the pairs the tester build lets through. */
     fun a17OnA16Pair(hostSdk: Int, image: ImageRef?, on: Boolean = a17OnA16): Boolean =
-        on && hostSdk == A16_HOST_SDK && image != null && image.id == Images.ID_ONEUI95 && image.sdk == A17_IMAGE_SDK
+        on && hostSdk == A16_HOST_SDK && image != null && image.id in A17_ON_A16_IMAGES && image.sdk == A17_IMAGE_SDK
 
     /** [profile] offers One UI 9.5 to this SDK [hostSdk] phone in a build with [on] (no system chosen yet). */
     fun a17OnA16Offered(hostSdk: Int, profile: PhoneProfile?, on: Boolean = a17OnA16, images: List<ImageRef> = Images.ALL): Boolean =

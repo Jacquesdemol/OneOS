@@ -124,6 +124,7 @@ val packageSets: Map<String, Pair<File, List<String>>> = linkedMapOf(
     "oneui95-f8" to (File(repoRoot, "out/overlays_oneui95_f8_r3") to listOf("tethering_payload.img")),
     // Tester builds (oneui8test3): One UI 9.5 on One UI 8, the r10 files plus the image's own modules One UI 8 cannot lend (tethering among them).
     "oneui95-a16" to (File(repoRoot, "out/overlays_oneui95_a16_r9") to listOf("tethering_payload.img")),
+    "infinityx-a16" to (File(repoRoot, "packages/infinityx-a16") to listOf("tethering_payload.img", "cellbroadcast_payload.img")),
     // PixelOS 17 (0.5.35): the POCO F7 build for the ARMv8.2 Galaxy A series.
     "pixelos" to (File(repoRoot, "out/overlays_pixelos_onyx_r5") to listOf("tethering_payload.img", "cellbroadcast_payload.img")),
 )

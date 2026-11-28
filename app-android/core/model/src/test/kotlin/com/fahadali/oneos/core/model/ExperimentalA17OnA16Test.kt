@@ -50,8 +50,10 @@ class ExperimentalA17OnA16Test {
         assertNull(Profiles.S_ULTRA_8450.choice(Images.ID_ONEUI95))
         assertEquals(Experimental.a17OnA16Pair(36, Images.ONEUI95), false)
         assertTrue(Experimental.a17OnA16Pair(36, Images.ONEUI95, on = true))
-        // Only that image, only on an SDK 36 phone.
+        assertTrue(Experimental.a17OnA16Pair(36, Images.INFINITYX, on = true))
+        // Only those images, only on an SDK 36 phone.
         assertFalse(Experimental.a17OnA16Pair(37, Images.ONEUI95, on = true))
+        assertFalse(Experimental.a17OnA16Pair(37, Images.INFINITYX, on = true))
         assertFalse(Experimental.a17OnA16Pair(36, Images.FIND_X9U_IN_1105, on = true))
         assertFalse(Experimental.a17OnA16Pair(36, Images.OXYGEN16, on = true))
         assertFalse(Experimental.a17OnA16Pair(36, null, on = true))
@@ -74,7 +76,12 @@ class ExperimentalA17OnA16Test {
                 // 0.5.41: a Galaxy Tab keeps its one tablet system.
                 assertSame(stable.id, stable, test)
             } else {
-                assertEquals(stable.id, stable.choices + ImageChoice(Images.ID_ONEUI95, PackageSets.ID_ONEUI95_A16, tested = false), test.choices)
+                assertEquals(
+                    stable.id,
+                    stable.choices + ImageChoice(Images.ID_ONEUI95, PackageSets.ID_ONEUI95_A16, tested = false) +
+                        ImageChoice(Images.ID_INFINITYX, PackageSets.ID_INFINITYX_A16, tested = false),
+                    test.choices,
+                )
             }
         }
         assertTrue(tester.filter { it.enabled && it.id !in Profiles.TABLETS.map { t -> t.id } }.all { it.choice(Images.ID_ONEUI95) != null })

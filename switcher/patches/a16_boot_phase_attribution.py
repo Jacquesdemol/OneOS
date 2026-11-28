@@ -118,6 +118,33 @@ LAMBDA_NEW = """    :catch_0
 """
 
 
+AOSP_SSM_OLD = """    :catch_0
+    move-exception p2
+
+    .line 331
+    new-instance v0, Ljava/lang/RuntimeException;
+"""
+AOSP_SSM_NEW = """    :catch_0
+    move-exception p2
+
+    invoke-static {p2}, Lcom/android/server/OneOSBootPhaseGuard;->ignorable(Ljava/lang/Throwable;)Z
+
+    move-result v7
+
+    if-eqz v7, :oneos_bpg_sync
+
+    invoke-virtual {p1}, Landroid/util/TimingsTraceLog;->traceEnd()V
+
+    iget p2, p0, Lcom/android/server/SystemServiceManager;->mCurrentPhase:I
+
+    goto :goto_1
+
+    :oneos_bpg_sync
+    .line 331
+    new-instance v0, Ljava/lang/RuntimeException;
+"""
+
+
 def find(root, rel):
     hits = [d for d in sorted(os.listdir(root)) if d.startswith("smali") and os.path.isfile(os.path.join(root, d, rel))]
     if len(hits) != 1:
@@ -139,9 +166,19 @@ def patch(root, rel, old, new, must):
 
 def main():
     root = sys.argv[1]
-    dirs = {patch(root, SSM_REL, SSM_OLD, SSM_NEW, ".method public final startBootPhase("),
-            patch(root, LAMBDA_REL, LAMBDA_OLD, LAMBDA_NEW, "SystemService;->onBootPhase(I)V")}
     home = find(root, SSM_REL)
+    ssm_path = os.path.join(root, home, SSM_REL)
+    ssm_text = open(ssm_path).read()
+    if "ISRB_BOOT" in ssm_text:
+        dirs = {patch(root, SSM_REL, SSM_OLD, SSM_NEW, ".method public final startBootPhase("),
+                patch(root, LAMBDA_REL, LAMBDA_OLD, LAMBDA_NEW, "SystemService;->onBootPhase(I)V")}
+    else:
+        ssm_dir = os.path.dirname(ssm_path)
+        for fn in sorted(os.listdir(ssm_dir)):
+            if fn.startswith("SystemServiceManager$$ExternalSyntheticLambda") and fn.endswith(".smali"):
+                if "SystemService;->onBootPhase(I)V" in open(os.path.join(ssm_dir, fn)).read():
+                    sys.exit(f"a16_boot_phase_attribution: unexpected async onBootPhase in {fn}")
+        dirs = {patch(root, SSM_REL, AOSP_SSM_OLD, AOSP_SSM_NEW, ".method public startBootPhase(")}
     gp = os.path.join(root, home, GUARD_REL)
     if os.path.exists(gp):
         sys.exit("a16_boot_phase_attribution: OneOSBootPhaseGuard already there")

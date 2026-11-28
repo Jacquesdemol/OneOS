@@ -514,10 +514,11 @@ object SwitchGates {
         return if (f.sdk in sdks) {
             Finding(ID_ANDROID, Level.OK, "Android ${AndroidRelease.name(f.sdk)}", "SDK ${f.sdk}, the same as the image.")
         } else if (experimental) {
+            val expName = image?.shortName ?: "One UI 9.5"
             Finding(
-                ID_ANDROID, Level.WARN, "Experimental: One UI 9.5 on Android $have",
-                "This phone runs Android $have (SDK ${f.sdk}); One UI 9.5 is Android 17 (SDK 37). This test build lets it " +
-                    "start next to One UI 8 anyway: the camera is off in it, and parts of One UI 9.5 may not work.",
+                ID_ANDROID, Level.WARN, "Experimental: $expName on Android $have",
+                "This phone runs Android $have (SDK ${f.sdk}); $expName is Android 17 (SDK 37). This test build lets it " +
+                    "start next to One UI 8 anyway: the camera is off in it, and parts of $expName may not work.",
                 R_ANDROID_EXPERIMENTAL,
             )
         } else if (image != null && Experimental.a17OnA16Offered(f.sdk, profile, a17OnA16, images)) {

@@ -504,7 +504,7 @@ if [ "$LAYOUT_HIDDEN" = 1 ] && [ "${ONEOS_GUEST_FOLD:-layout}" != off ]; then
             # Fold8's native states mark CLOSE and TENT as OUTER_PRIMARY.
             STATES="-1:$INNER:$COVER 0:$COVER:$INNER 1:$COVER:$INNER 3:$INNER:$COVER"
             LNOTE="Fold8 One UI 9.5: closed and tent use the cover; open uses the inner."
-        elif [ -e /system/framework/oplus-services.jar ]; then
+        elif [ -e /system/framework/oplus-services.jar ] && [ ! -e /system/framework/org.lineageos.platform.jar ]; then
             # Samsung's states from the phone's own device_state_configuration.xml:
             # 0 (lid closed) on the cover, every other one on the inner panel.
             # The Z Fold8 Ultra and Z Fold7 list 0 CLOSE and 3 OPEN; the Z Fold8
@@ -739,7 +739,7 @@ done
 [ "$n" -gt 0 ] || echo "no physical displays listed yet"
 SFKICK
 chmod 644 /data/oneos_sf_kick.sh
-if [ -e /system/framework/oplus-services.jar ]; then
+if [ -e /system/framework/oplus-services.jar ] && [ ! -e /system/framework/org.lineageos.platform.jar ]; then
     :
 elif [ "${ONEOS_GUEST_SF_PIN:-1}" = 0 ]; then
     echo "[Pivoted Root] SF render rate left to DisplayManager (ONEOS_GUEST_SF_PIN=0)"
@@ -2289,7 +2289,7 @@ if [ "${ONEOS_PROFILE:-}" = f8 ] && [ -f /data/.oneui95-fold8-secondary-home-tem
     FOLD8_RESTORE_DEX_HOME=1
 fi
 if [ "$FOLD_CONTINUE" = 1 ] || [ "$FOLD8_TASKBAR" = 1 ] || [ "$FOLD8_RESTORE_DEX_HOME" = 1 ]; then
-    if [ -e /system/framework/oplus-services.jar ]; then
+    if [ -e /system/framework/oplus-services.jar ] && [ ! -e /system/framework/org.lineageos.platform.jar ]; then
         FOLDN=continue_using_apps_when_folded
         FOLDV=1
     else

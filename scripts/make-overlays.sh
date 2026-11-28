@@ -471,7 +471,7 @@ KEY_DIRS="$KEY_DIRS $(python3 -I "$ROOT/switcher/patches/guest_soundtrigger_no_r
 # image without ColorDisplayService.setUp, and not run for ColorOS: its
 # services.jar has the anchor too, but nothing there writes cv_enabled, so its
 # system_server stays as it was.
-if in_image /system/framework/oplus-services.jar; then
+if in_image /system/framework/oplus-services.jar && ! in_image /system/framework/org.lineageos.platform.jar; then
     echo "Comfort View bridge: ColorOS image, left out"
 else
     KEY_DIRS="$KEY_DIRS $(python3 -I "$ROOT/switcher/patches/comfort_view_bridge.py" "$WORK/services" "$ROOT/switcher/patches/OneOSComfortView.smali")"

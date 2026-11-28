@@ -1,0 +1,20 @@
+com.android.adservices com_android_adservices libc.so libdl.so liblog.so libm.so libz.so
+com.android.appsearch com_android_appsearch libbinder_ndk.so libc.so libdl.so libicu.so liblog.so libm.so
+com.android.art com_android_art libicu_jni.so heapprofd_client_api.so libadbconnection_client.so libartpalette-system.so libbinder_ndk.so libc.so libdl.so libdl_android.so libicu.so liblog.so libm.so libselinux.so libstatspull.so libstatssocket.so libz.so
+com.android.bt com_android_bt libaaudio.so libbinder_ndk.so libc.so libdl.so liblog.so libm.so libnativehelper.so libstatssocket.so libvndksupport.so
+com.android.configinfrastructure com_android_configinfrastructure libc.so libdl.so liblog.so libm.so
+com.android.conscrypt com_android_conscrypt libandroidio.so libc.so libdl.so liblog.so libm.so
+com.android.i18n com_android_i18n libc.so libdl.so liblog.so libm.so libnativehelper.so
+com.android.media.swcodec com_android_media_swcodec :sphal libbinder_ndk.so libc.so libdl.so liblog.so libm.so libmediandk.so libnativewindow.so libsync.so libvndksupport.so
+com.android.media com_android_media libandroid.so libbinder_ndk.so libmediandk.so :sphal libandroid.so libbinder_ndk.so libc.so libdl.so liblog.so libm.so libmediametrics.so libmediandk.so libnativewindow.so libstatssocket.so libvndksupport.so
+com.android.mediaprovider com_android_mediaprovider libc.so libdl.so libicu.so libjnigraphics.so liblog.so libm.so libz.so
+com.android.neuralnetworks com_android_neuralnetworks libbinder_ndk.so libc.so libdl.so liblog.so libm.so libnativewindow.so libneuralnetworks_packageinfo.so libstatssocket.so libvndksupport.so
+com.android.nfcservices com_android_nfcservices libbinder_ndk.so libc.so libdl.so liblog.so libm.so libnativehelper.so libstatssocket.so libvndksupport.so libz.so
+com.android.ondevicepersonalization com_android_ondevicepersonalization libc.so libdl.so liblog.so libm.so
+com.android.os.statsd com_android_os_statsd libbinder_ndk.so libc.so libdl.so libincident.so liblog.so libm.so libuprobestats_client.so
+com.android.profiling com_android_profiling libc.so libdl.so liblog.so libm.so
+com.android.runtime com_android_runtime libc.so libclang_rt.hwasan-aarch64-android.so libdexfile.so libdl.so libdl_android.so liblog.so libm.so libz.so
+com.android.sdkext com_android_sdkext libc.so libdl.so liblog.so libm.so
+com.android.uprobestats com_android_uprobestats libandroid.so libbinder_ndk.so libc.so libdl.so liblog.so libm.so libstatspull.so libstatssocket.so
+com.android.uwb com_android_uwb libbinder_ndk.so libc.so libdl.so liblog.so libm.so
+com.android.wifi com_android_wifi libbinder_ndk.so libc.so libdl.so liblog.so libm.so libvndksupport.so

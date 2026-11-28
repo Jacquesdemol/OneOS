@@ -3108,9 +3108,9 @@ while true; do
             # root: it is made with mkdir and checked with -e and -L, never with
             # touch or -f, which follow a link the guest may have left there to
             # a path in One UI's /data (an older marker, a file, still counts).
-            if [ $GUEST_OPLUS = 0 ] && [ -L $STAGE/data/oneos_blur_default ]; then
+            if { [ $GUEST_OPLUS = 0 ] || [ $GUEST_AOSP_SYSUI = 1 ]; } && [ -L $STAGE/data/oneos_blur_default ]; then
                 echo \"[UI Activator] window blur: data/oneos_blur_default is a link, not made by OneOS; left alone\"
-            elif [ $GUEST_OPLUS = 0 ] && [ $GUEST_BLUR = 1 ] && [ ! -e $STAGE/data/oneos_blur_default ]; then
+            elif { [ $GUEST_OPLUS = 0 ] || [ $GUEST_AOSP_SYSUI = 1 ]; } && [ $GUEST_BLUR = 1 ] && [ ! -e $STAGE/data/oneos_blur_default ]; then
                 $BB nsenter -t \$PID -m /system/bin/sh /data/oneos_genv.sh /system/bin/settings put global disable_window_blurs 0 >/dev/null 2>&1 &&
                     mkdir $STAGE/data/oneos_blur_default 2>/dev/null &&
                     echo \"[UI Activator] window blur: allowed (disable_window_blurs 0, first boot of this stage)\"
@@ -3381,7 +3381,7 @@ while true; do
                         fi
                         if [ \"\$GSHAPE\" != 1 ]; then
                             echo \"[UI Activator] density: guest display 0 is \${GW}x\${GDH:-?}, not the shape of One UI's panel (\$HP px wide, \$(cat $STAGE/host_panel_size 2>/dev/null | tr ' ' 'x')); left at base\"
-                        elif [ $GUEST_OPLUS = 1 ]; then
+                        elif [ $GUEST_OPLUS = 1 ] && [ $GUEST_AOSP_SYSUI = 0 ]; then
                             # ColorOS's Settings puts its Display size back at every boot
                             # (SettingsReceiver -> restoreScreenZoomSettings): the entry at
                             # Settings.System display_density_index_manual in settingslib's list
@@ -3538,7 +3538,7 @@ while true; do
             # Brightness below ColorOS's minimum level (a fresh stage has 102):
             # its default, about 135 nits with the Samsung panel curve.
             # ColorOS's scale only (AOSP's screen_brightness is 0..255).
-            if [ $GUEST_OPLUS = 1 ]; then
+            if [ $GUEST_OPLUS = 1 ] && [ $GUEST_AOSP_SYSUI = 0 ]; then
             b=\$($BB nsenter -t \$PID -m /system/bin/sh /data/oneos_genv.sh /system/bin/settings get system screen_brightness 2>/dev/null)
             [ \"\${b%%.*}\" -ge 222 ] 2>/dev/null || $BB nsenter -t \$PID -m /system/bin/sh /data/oneos_genv.sh /system/bin/settings put system screen_brightness 4570
             # Once with the fixed panel curve: the saved value was chosen while the
@@ -3571,7 +3571,7 @@ while true; do
             # The exact package (0.4.63): list packages matches by substring, and the first
             # line was another com.android.systemui.* package (A56 fda1b80b: files given to
             # uid 15004, SystemUI ran as 15142, its save still EACCES).
-            if [ $GUEST_OPLUS = 1 ]; then
+            if [ $GUEST_OPLUS = 1 ] && [ $GUEST_AOSP_SYSUI = 0 ]; then
                 su_uid=\$($BB nsenter -t \$PID -m /system/bin/sh /data/oneos_genv.sh /system/bin/cmd package list packages -U com.android.systemui 2>/dev/null | sed -n 's/^package:com[.]android[.]systemui uid://p' | head -1 | tr -dc 0-9)
                 depth=$STAGE/data/oplus/os
                 if [ -n \"\$su_uid\" ] && [ -d \$depth ] && [ ! -L \$depth ] && [ ! -L $STAGE/data/oplus ]; then
@@ -3596,7 +3596,7 @@ while true; do
             # package manager, nothing of One UI's. After HOME: it does not hold
             # up the first screen, and no call comes that early. The marker is
             # made and checked like the blur one (mkdir, -e and -L).
-            if [ $GUEST_OPLUS = 0 ]; then
+            if [ $GUEST_OPLUS = 0 ] || [ $GUEST_AOSP_SYSUI = 1 ]; then
                 DST=''
                 if [ -L $STAGE/data/oneos_dialer_bt ]; then
                     DST='data/oneos_dialer_bt is a link, not made by OneOS; nothing granted'
@@ -4440,7 +4440,7 @@ while true; do
             # SIM attach APN (run 42). Each SIM's slot, the guest's sub id and the
             # preferred APN its telephony provider resolves (guest_prepare.sh
             # seeded One UI's for sub = slot + 1). Pixel guest, in the background.
-            if [ $GUEST_OPLUS = 0 ]; then
+            if [ $GUEST_OPLUS = 0 ] || [ $GUEST_AOSP_SYSUI = 1 ]; then
                 ( sleep 15
                   $BB nsenter -t \$PID -m /system/bin/sh /data/oneos_genv.sh /system/bin/content query --uri content://telephony/siminfo --projection _id:sim_id --where 'sim_id>=0' 2>/dev/null | grep '^Row: ' | while IFS= read -r row; do
                       sub=\$(echo \"\$row\" | sed -n 's/^Row: [0-9]* _id=\([0-9]*\),.*/\1/p')
@@ -4530,7 +4530,7 @@ while true; do
                     # state in diag_wifi (network names only there, never in this
                     # log). In the background. None of it needs verbose logging (set
                     # above; run 43: switching it on here gave the debug text).
-                    if [ $GUEST_OPLUS = 0 ]; then
+                    if [ $GUEST_OPLUS = 0 ] || [ $GUEST_AOSP_SYSUI = 1 ]; then
                         rm -rf $STAGE/diag_wifi
                         ( sleep 45; mkdir -p $STAGE/diag_wifi
                           for c in status list-scan-results list-networks is-verbose-logging; do echo \"== cmd wifi \$c\"; timeout 15 $BB nsenter -t \$PID -m /system/bin/sh /data/oneos_genv.sh /system/bin/cmd wifi \$c 2>&1; done > $STAGE/diag_wifi/wifi.txt
@@ -4848,7 +4848,7 @@ if [ -w /sys/class/lcd/panel/local_hbm ]; then
     echo "Local HBM keeper started (fingerprint spot off when left on)"
 fi
 rm -f "$STAGE/panel_keeper.log"
-if [ "$GUEST_OPLUS" != 1 ] && [ "${ONEOS_GUEST_SF_PIN:-1}" != 0 ] && [ -r /sys/class/lcd/panel/vrr ]; then
+if { [ "$GUEST_OPLUS" != 1 ] || [ "$GUEST_AOSP_SYSUI" = 1 ]; } && [ "${ONEOS_GUEST_SF_PIN:-1}" != 0 ] && [ -r /sys/class/lcd/panel/vrr ]; then
     $BB sh -c "
     : oneos_panel_keeper
     echo \$\$ > /sys/fs/cgroup/cgroup.procs 2>/dev/null
@@ -4894,7 +4894,7 @@ if [ "$GUEST_OPLUS" != 1 ] && [ "${ONEOS_GUEST_SF_PIN:-1}" != 0 ] && [ -r /sys/c
 " </dev/null >/dev/null 2>&1 &
     echo "Panel keeper: on (every 15 s to $STAGE/panel_keeper.log)"
 else
-    echo "Panel keeper: off ($([ "$GUEST_OPLUS" = 1 ] && echo "this system sets its own refresh rate" || echo "no /sys/class/lcd/panel/vrr, or ONEOS_GUEST_SF_PIN=0"))"
+    echo "Panel keeper: off ($([ "$GUEST_OPLUS" = 1 ] && [ "$GUEST_AOSP_SYSUI" = 0 ] && echo "this system sets its own refresh rate" || echo "no /sys/class/lcd/panel/vrr, or ONEOS_GUEST_SF_PIN=0"))"
 fi
 
 # OneOS dead-man switch. If the guest is not booting, put One UI back by itself:

@@ -488,16 +488,24 @@ fi
 # call would land on another method. So the camera is off in such a session (below: the image's Samsung
 # Camera hidden, the A series' camera not bound, the native camera client patches not bound; guest_props.sh
 # sets config.disable_cameraservice so the guest's CameraManager never connects to One UI's cameraserver).
+INFINITYX_A16_IMAGE=0
+if ! grep -q '^ro.build.version.oneui=' "$ROOTFS/system/build.prop" 2>/dev/null &&
+   { grep -q '^ro\.infinity\.' "$ROOTFS/system/build.prop" 2>/dev/null ||
+     grep -q '^  "set": "infinityx-a16",$' "$STAGE/.oneos_stage" 2>/dev/null; }; then
+    INFINITYX_A16_IMAGE=1
+fi
 A17_ON_A16=0
 A16_CAMERA=0
 rm -f "$STAGE/a16_camera_on"
-if [ "$(getprop ro.build.version.sdk)" = 36 ] && grep -q '^ro.build.version.oneui=' "$ROOTFS/system/build.prop" 2>/dev/null &&
+if [ "$(getprop ro.build.version.sdk)" = 36 ] &&
+   { grep -q '^ro.build.version.oneui=' "$ROOTFS/system/build.prop" 2>/dev/null || [ "$INFINITYX_A16_IMAGE" = 1 ]; } &&
    [ "$(sed -n 's/^ro.build.version.sdk=//p' "$ROOTFS/system/build.prop" 2>/dev/null | tail -n 1)" = 37 ]; then
     A17_ON_A16=1
     # 0.5.39: a set with framework_patched_oneui8.jar (patches/a16_camera.py: the same jar with One UI 8's
     # camera codes, switcher/patches/host_camera_oneui8.txt, read on the S22 Ultra) turns the camera on:
     # bound in place of framework_patched.jar, the image's Samsung Camera kept, config.disable_cameraservice
-    # not set (guest_props.sh reads $STAGE/a16_camera_on). ONEOS_A16_CAMERA=0 keeps it off.
+    # not set (guest_props.sh reads $STAGE/a16_camera_on). ONEOS_A16_CAMERA=0 keeps it off (default 0 on
+    # Infinity-X for lean boot, toggleable with ONEOS_A16_CAMERA=1).
     # 0.5.45: One UI 8.5 (S23 FE 8a093c12, A35 5434447d) is Android 16 QPR2: its cameraserver takes One UI 9.0's
     # CameraCompatibilityInfo where One UI 8 has the int, so the One UI 8 jar's calls failed there (a
     # NullPointerException on every getCameraCharacteristics; Samsung's video call engine restarted ~2,000 times).
@@ -505,14 +513,17 @@ if [ "$(getprop ro.build.version.sdk)" = 36 ] && grep -q '^ro.build.version.oneu
     A16_OUI=$(getprop ro.build.version.oneui); case "$A16_OUI" in ''|*[!0-9]*) A16_OUI=0 ;; esac
     A16_JAR=framework_patched_oneui8.jar; A16_NAME="One UI 8"
     [ "$A16_OUI" -ge 80500 ] && A16_JAR=framework_patched_oneui85.jar && A16_NAME="One UI 8.5"
-    if [ -f "$STAGE/$A16_JAR" ] && [ "${ONEOS_A16_CAMERA:-1}" = 1 ] &&
+    A16_CAM_DEF=1; [ "$INFINITYX_A16_IMAGE" = 1 ] && A16_CAM_DEF=0
+    if [ -f "$STAGE/$A16_JAR" ] && [ "${ONEOS_A16_CAMERA:-$A16_CAM_DEF}" = 1 ] &&
        awk -v j="$A16_JAR" '$2 == j { f = 1 } END { exit !f }' "$STAGE/guards.txt"; then
         A16_CAMERA=1
         CAM_FW=$A16_JAR
         : > "$STAGE/a16_camera_on"
-        echo "Experimental One UI 9.5 on One UI 8 (SDK 36, One UI $A16_OUI): camera on, $A16_NAME's camera codes ($A16_JAR)"
+        echo "Experimental Android 17 on One UI 8 (SDK 36, One UI $A16_OUI): camera on, $A16_NAME's camera codes ($A16_JAR)"
+    elif [ -f "$STAGE/$A16_JAR" ] && [ "${ONEOS_A16_CAMERA:-$A16_CAM_DEF}" != 1 ]; then
+        echo "Experimental Android 17 on One UI 8 (SDK 36, One UI $A16_OUI): camera off (ONEOS_A16_CAMERA=${ONEOS_A16_CAMERA:-$A16_CAM_DEF}, config.disable_cameraservice=true)"
     else
-        echo "Experimental One UI 9.5 on One UI 8 (SDK 36, One UI $A16_OUI): camera off (no $A16_JAR in this set)"
+        echo "Experimental Android 17 on One UI 8 (SDK 36, One UI $A16_OUI): camera off (no $A16_JAR in this set)"
     fi
 fi
 # The boot splash (OneOSBootStatus) runs on One UI 8's runtime while the session's SDK prop says 37: it
@@ -2080,7 +2091,7 @@ DDCEOF
 DDCEOF
 }
 PETC="$GUEST_PRODUCT/etc"
-if [ -e "$ROOTFS/system/framework/oplus-services.jar" ] || [ -L "$ROOTFS/system/framework/oplus-services.jar" ]; then
+if { [ -e "$ROOTFS/system/framework/oplus-services.jar" ] || [ -L "$ROOTFS/system/framework/oplus-services.jar" ]; } && [ ! -e "$ROOTFS/system/framework/org.lineageos.platform.jar" ] && [ ! -L "$ROOTFS/system/framework/org.lineageos.platform.jar" ]; then
     :
 elif [ "${ONEOS_GUEST_DISPLAY_CONFIG:-1}" != 1 ]; then
     echo "Display config: the image's own (ONEOS_GUEST_DISPLAY_CONFIG=0)"
@@ -6332,10 +6343,12 @@ if [ -d "$STAGE/data/misc/adb" ]; then
     fi
 fi
 
-# Pixel guest only (an image with oplus-services.jar is ColorOS, unchanged).
+# Pixel / AOSP guests only (an image with oplus-services.jar and no org.lineageos.platform.jar is ColorOS, unchanged).
 # After 5b and 5c, which relabel and re-own the staged trees every session.
 GUEST_OPLUS=0
-{ [ -e "$ROOTFS/system/framework/oplus-services.jar" ] || [ -L "$ROOTFS/system/framework/oplus-services.jar" ]; } && GUEST_OPLUS=1
+{ [ -e "$ROOTFS/system/framework/oplus-services.jar" ] || [ -L "$ROOTFS/system/framework/oplus-services.jar" ]; } &&
+    [ ! -e "$ROOTFS/system/framework/org.lineageos.platform.jar" ] &&
+    [ ! -L "$ROOTFS/system/framework/org.lineageos.platform.jar" ] && GUEST_OPLUS=1
 [ "$GUEST_OPLUS" = 1 ] || echo "=== 5c2. One UI's preferred APNs and Bluetooth pairings for the guest ==="
 # Preferred (attach) APN per SIM, from One UI: oneos_switch.sh recorded
 # host_pref_apn ("slot mcc mnc apn") while One UI's telephony provider ran.

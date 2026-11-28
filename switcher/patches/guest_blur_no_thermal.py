@@ -34,6 +34,9 @@ def main(root):
         sys.exit(f"guest_blur_no_thermal: BlurController found {len(found)} times")
     path = found[0]
     lines = open(path).read().split("\n")
+    if "mDisabledByThermal:Z" not in "\n".join(lines):
+        print("guest_blur_no_thermal: BlurController already omits mDisabledByThermal", file=sys.stderr)
+        return
     heads = [k for k, l in enumerate(lines) if METHOD.match(l)]
     if len(heads) != 1:
         sys.exit("guest_blur_no_thermal: updateBlurEnabled() not found exactly once")

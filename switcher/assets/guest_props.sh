@@ -317,7 +317,8 @@ add)
     #   under 120 Hz): SurfaceFlinger's content detection off, so whatever moves renders at the top rate and
     #   only a still screen renders at the lower rate (SurfaceFlinger's idle timer; the panel stays at its top mode). With it
     #   on, "normal" animations ran at 60 Hz (owner, A36: "OS feels kinda sluggish").
-    if [ ! -e "$ROOTFS/system/framework/oplus-services.jar" ] && [ ! -e "$ROOTFS/system/framework/miui-services.jar" ] &&
+    if { [ ! -e "$ROOTFS/system/framework/oplus-services.jar" ] || [ -e "$ROOTFS/system/framework/org.lineageos.platform.jar" ]; } &&
+       [ ! -e "$ROOTFS/system/framework/miui-services.jar" ] &&
        [ ! -e "$ROOTFS/system/system_ext/framework/nt-telephony-common.jar" ] && [ ! -e "$ROOTFS/system_ext/framework/nt-telephony-common.jar" ] &&
        ! grep -q '^ro.build.version.oneui=' "$ROOTFS/system/build.prop" 2>/dev/null; then
         for kv in "sys.brightness.disable_gamma_conversion=true:${ONEOS_GUEST_LINEAR_BRIGHTNESS:-1}" \
@@ -591,7 +592,7 @@ add)
         sed -i "/^$dk=/d" "$NEW"
     }
     GUEST_OPLUS=0
-    [ -f "$ROOTFS/system/framework/oplus-services.jar" ] && GUEST_OPLUS=1
+    [ -f "$ROOTFS/system/framework/oplus-services.jar" ] && [ ! -f "$ROOTFS/system/framework/org.lineageos.platform.jar" ] && GUEST_OPLUS=1
     # ColorOS's records of its last boot's kind, when One UI's own property store holds one
     # (owner's Fold, 11-10: persist.sys.oplus.my_carrier.data_utc_backup with a date of August,
     # written there by a session from before the store was kept apart (0.4.81); every One UI
@@ -1941,7 +1942,14 @@ ro.miui.backdrop_sampling_enabled=true"
     # has the phone's version. The minor version (sdk_full) goes with it, so the block below leaves it.
     a17_host=$(getprop ro.build.version.sdk)
     a17_guest=$(sed -n 's/^ro.build.version.sdk=//p' "$ROOTFS/system/build.prop" 2>/dev/null | tail -n 1)
-    if [ "$a17_host" = 36 ] && [ "$a17_guest" = 37 ] && grep -q '^ro.build.version.oneui=' "$ROOTFS/system/build.prop" 2>/dev/null; then
+    a17_infx=0
+    if ! grep -q '^ro.build.version.oneui=' "$ROOTFS/system/build.prop" 2>/dev/null &&
+       { grep -q '^ro\.infinity\.' "$ROOTFS/system/build.prop" 2>/dev/null ||
+         grep -q '^  "set": "infinityx-a16",$' "$STAGE/.oneos_stage" 2>/dev/null; }; then
+        a17_infx=1
+    fi
+    if [ "$a17_host" = 36 ] && [ "$a17_guest" = 37 ] &&
+       { grep -q '^ro.build.version.oneui=' "$ROOTFS/system/build.prop" 2>/dev/null || [ "$a17_infx" = 1 ]; }; then
         for key in ro.build.version.sdk ro.build.version.sdk_full ro.build.version.release \
                    ro.build.version.release_or_codename ro.build.version.release_or_preview_display ro.build.version.codename; do
             g=$(sed -n "s/^$key=//p" "$ROOTFS/system/build.prop" 2>/dev/null | tail -n 1)
@@ -2083,6 +2091,18 @@ ro.miui.backdrop_sampling_enabled=true"
             [ -n "$h" ] && [ "$g" != "$h" ] || continue
             echo "$key=$h" >> "$OVR" && "$RP" -n "$key" "$g" 2>/dev/null &&
                 echo "guest_props: $key=$g for the session (One UI image; the phone's One UI: $h)"
+        done
+    elif ! grep -q '^ro.build.version.oneui=' "$ROOTFS/system/build.prop" 2>/dev/null &&
+         { [ "$a17_infx" = 1 ] || [ -e "$ROOTFS/system/framework/org.lineageos.platform.jar" ]; }; then
+        # AOSP / Infinity-X guests: hide the host's Samsung/SEP version props for the session so apps do not
+        # take Samsung/Knox code paths and crash on missing Sem* classes. Recorded in OVR so remove restores
+        # One UI's exact values in the same property slots on in-place return.
+        for key in ro.build.version.oneui ro.build.version.sep \
+                   $(getprop | sed -n 's/^\[\(ro\.build\.version\.sem[A-Za-z0-9_.]*\)\]: .*/\1/p'); do
+            h=$(getprop "$key")
+            [ -n "$h" ] || continue
+            echo "$key=$h" >> "$OVR" && "$RP" -n "$key" "" 2>/dev/null &&
+                echo "guest_props: hid $key for the session (AOSP guest; One UI: $h)"
         done
     fi
     # The image's model for a One UI image (0.5.22, owner: "modify the OS info as S26 itself. No need

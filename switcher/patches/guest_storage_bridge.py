@@ -38,9 +38,11 @@ def top_dir(root: Path, path: Path) -> str:
     return path.relative_to(root).parts[0]
 
 
-def patch_installer_method(lines: list[str], method_sig: str, hook_lines: list[str], label: str) -> bool:
+def patch_installer_method(lines: list[str], method_sig: str, hook_fn, label: str, optional: bool = False) -> bool:
     start = next((i for i, l in enumerate(lines) if l.startswith(".method ") and method_sig in l), None)
     if start is None:
+        if optional:
+            return False
         sys.exit(f"guest_storage_bridge: missing {method_sig} in Installer.smali")
     end = next((i for i in range(start + 1, len(lines)) if lines[i] == ".end method"), None)
     if end is None:
@@ -51,25 +53,52 @@ def patch_installer_method(lines: list[str], method_sig: str, hook_lines: list[s
         return False
 
     anchor = None
+    res_reg = "v1"
     for i in range(start, end):
         if "Lcom/android/server/pm/Installer;->checkBeforeRemote()V" in lines[i]:
             anchor = i
             break
     if anchor is None:
+        # AOSP Installer uses checkBeforeRemote()Z with an early return before :cond_0;
+        # hook right after :cond_0 where all p1..pN parameters remain intact and v0 is free.
+        for i in range(start, end):
+            if "Lcom/android/server/pm/Installer;->checkBeforeRemote()Z" in lines[i]:
+                for j in range(i + 1, min(i + 15, end)):
+                    if lines[j].strip().startswith("if-nez "):
+                        target = lines[j].strip().split()[-1]
+                        for k in range(j + 1, end):
+                            if lines[k].strip() == target:
+                                anchor = k
+                                res_reg = "v0"
+                                break
+                        break
+                break
+    if anchor is None:
         sys.exit(f"guest_storage_bridge: missing checkBeforeRemote() in {method_sig}")
 
+    hook_lines = hook_fn(res_reg)
     lines[anchor + 1 : anchor + 1] = ["", MARK, *hook_lines, f"    :{label}"]
     return True
 
 
 def patch_installer(path: Path) -> bool:
-    lines = path.read_text(encoding="utf-8", errors="surrogateescape").split("\n")
+    text = path.read_text(encoding="utf-8", errors="surrogateescape")
+    aosp_installer = "Lcom/android/server/pm/Installer;->checkBeforeRemote()Z" in text
+    lines = text.split("\n")
     changed = False
 
-    changed |= patch_installer_method(
-        lines,
-        "getAppSize(Ljava/lang/String;[Ljava/lang/String;IIII[J[Ljava/lang/String;Landroid/content/pm/PackageStats;)V",
-        [
+    def app_size_hook(res_reg: str) -> list[str]:
+        if res_reg == "v0":
+            return [
+                f"    invoke-static/range {{p1 .. p9}}, {HELPER_DESC}->getAppSize(Ljava/lang/String;[Ljava/lang/String;IIII[J[Ljava/lang/String;Landroid/content/pm/PackageStats;)Z",
+                "",
+                "    move-result v0",
+                "",
+                "    if-eqz v0, :cond_oneos_getappsize_fallback",
+                "",
+                "    return-void",
+            ]
+        return [
             f"    invoke-static/range {{v1 .. v9}}, {HELPER_DESC}->getAppSize(Ljava/lang/String;[Ljava/lang/String;IIII[J[Ljava/lang/String;Landroid/content/pm/PackageStats;)Z",
             "",
             "    move-result v13",
@@ -77,14 +106,19 @@ def patch_installer(path: Path) -> bool:
             "    if-eqz v13, :cond_oneos_getappsize_fallback",
             "",
             "    return-void",
-        ],
+        ]
+
+    changed |= patch_installer_method(
+        lines,
+        "getAppSize(Ljava/lang/String;[Ljava/lang/String;IIII[J[Ljava/lang/String;Landroid/content/pm/PackageStats;)V",
+        app_size_hook,
         "cond_oneos_getappsize_fallback",
     )
 
     changed |= patch_installer_method(
         lines,
         "getAppSizeAndFileCount(Ljava/lang/String;[Ljava/lang/String;IIII[J[Ljava/lang/String;)[J",
-        [
+        lambda _res: [
             f"    invoke-static/range {{v1 .. v8}}, {HELPER_DESC}->getAppSizeAndFileCount(Ljava/lang/String;[Ljava/lang/String;IIII[J[Ljava/lang/String;)[J",
             "",
             "    move-result-object v12",
@@ -94,17 +128,18 @@ def patch_installer(path: Path) -> bool:
             "    return-object v12",
         ],
         "cond_oneos_getappsizecnt_fallback",
+        optional=aosp_installer,
     )
 
     changed |= patch_installer_method(
         lines,
         "getUserSize(Ljava/lang/String;II[I[ILandroid/content/pm/PackageStats;)V",
-        [
+        lambda res_reg: [
             f"    invoke-static/range {{p1 .. p6}}, {HELPER_DESC}->getUserSize(Ljava/lang/String;II[I[ILandroid/content/pm/PackageStats;)Z",
             "",
-            "    move-result v1",
+            f"    move-result {res_reg}",
             "",
-            "    if-eqz v1, :cond_oneos_getusersize_fallback",
+            f"    if-eqz {res_reg}, :cond_oneos_getusersize_fallback",
             "",
             "    return-void",
         ],
@@ -114,14 +149,14 @@ def patch_installer(path: Path) -> bool:
     changed |= patch_installer_method(
         lines,
         "getExternalSize(Ljava/lang/String;II[I)[J",
-        [
+        lambda res_reg: [
             f"    invoke-static {{p1, p2, p3, p4}}, {HELPER_DESC}->getExternalSize(Ljava/lang/String;II[I)[J",
             "",
-            "    move-result-object v1",
+            f"    move-result-object {res_reg}",
             "",
-            "    if-eqz v1, :cond_oneos_getextsize_fallback",
+            f"    if-eqz {res_reg}, :cond_oneos_getextsize_fallback",
             "",
-            "    return-object v1",
+            f"    return-object {res_reg}",
         ],
         "cond_oneos_getextsize_fallback",
     )
@@ -155,31 +190,64 @@ def patch_clear_data(pms_path: Path) -> bool:
 
 def patch_clear_cache(root: Path) -> Path | None:
     clear_call = "Lcom/android/server/pm/AppDataHelper;->clearAppDataLIF(Lcom/android/server/pm/pkg/AndroidPackage;II)V"
+    call_re = re.compile(
+        r"invoke-virtual \{[vp]\d+, ([vp]\d+), ([vp]\d+), [vp]\d+\}, " + re.escape(clear_call)
+    )
     matches = []
     for p in sorted(root.rglob("PackageManagerService$IPackageManagerImpl$$ExternalSyntheticLambda*.smali")):
         txt = p.read_text(encoding="utf-8", errors="surrogateescape")
         if clear_call in txt and ("0x17" in txt or "0x27" in txt):
             matches.append((p, txt))
-    if len(matches) != 1:
+    if len(matches) == 1:
+        path, text = matches[0]
+        if "OneOSStorageHelper;->clearAppCache(" in text:
+            return None
+        hits = list(call_re.finditer(text))
+        if not hits:
+            sys.exit(f"guest_storage_bridge: clearAppDataLIF invocation pattern mismatch in {path.name}")
+        last = hits[-1]
+        pkg_reg, user_reg = last.group(1), last.group(2)
+        inject = (
+            f"\n\n{MARK}\n"
+            f"    invoke-static {{{pkg_reg}, {user_reg}}}, {HELPER_DESC}->clearAppCache(Lcom/android/server/pm/pkg/AndroidPackage;I)V"
+        )
+        text = text[: last.end()] + inject + text[last.end() :]
+        path.write_text(text, encoding="utf-8", errors="surrogateescape")
+        return path
+    if len(matches) > 1:
         sys.exit(f"guest_storage_bridge: expected 1 cache-clear lambda, found {len(matches)}")
-    path, text = matches[0]
-    if "OneOSStorageHelper;->clearAppCache(" in text:
+
+    # AOSP / Infinity-X (CP2A): R8 keeps lambda$deleteApplicationCacheFilesAsUser inside
+    # PackageManagerService$IPackageManagerImpl.smali instead of generating a separate class.
+    ipms = find_one(root, os.path.join("com", "android", "server", "pm", "PackageManagerService$IPackageManagerImpl.smali"))
+    text = ipms.read_text(encoding="utf-8", errors="surrogateescape")
+    m_meth = None
+    for m in re.finditer(
+        r"^\.method [^\n]*deleteApplicationCacheFilesAsUser[^\n]*\n.*?^\.end method",
+        text,
+        re.M | re.S,
+    ):
+        body = m.group(0)
+        if clear_call in body and ("0x17" in body or "0x27" in body):
+            m_meth = m
+            break
+    if not m_meth:
+        sys.exit("guest_storage_bridge: expected 1 cache-clear lambda, found 0")
+    if "OneOSStorageHelper;->clearAppCache(" in m_meth.group(0):
         return None
-    call_re = re.compile(
-        r"invoke-virtual \{v\d+, (v\d+), (v\d+), v\d+\}, " + re.escape(clear_call)
-    )
-    hits = list(call_re.finditer(text))
+    hits = list(call_re.finditer(m_meth.group(0)))
     if not hits:
-        sys.exit(f"guest_storage_bridge: clearAppDataLIF invocation pattern mismatch in {path.name}")
+        sys.exit(f"guest_storage_bridge: clearAppDataLIF invocation pattern mismatch in {ipms.name}")
     last = hits[-1]
     pkg_reg, user_reg = last.group(1), last.group(2)
     inject = (
         f"\n\n{MARK}\n"
         f"    invoke-static {{{pkg_reg}, {user_reg}}}, {HELPER_DESC}->clearAppCache(Lcom/android/server/pm/pkg/AndroidPackage;I)V"
     )
-    text = text[: last.end()] + inject + text[last.end() :]
-    path.write_text(text, encoding="utf-8", errors="surrogateescape")
-    return path
+    ins_at = m_meth.start() + last.end()
+    text = text[:ins_at] + inject + text[ins_at:]
+    ipms.write_text(text, encoding="utf-8", errors="surrogateescape")
+    return ipms
 
 
 def main() -> int:

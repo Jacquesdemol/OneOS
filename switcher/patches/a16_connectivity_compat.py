@@ -140,6 +140,20 @@ def main():
         if site_kind != kind:
             continue
         d = find(root, rel)
+        # AOSP / Infinity-X (CP2A.260605.016): R8 inlined StatsPullAtomService's network-stats lambda into
+        # StatsPullAtomService.smali itself, and IpConnectivityMetrics / NetdEventListenerService do not call
+        # ConnectivitySettingsManager.{get,set}L4sDeveloperOption yet (unlike One UI 9.5 S948BXXU6ZZKN).
+        if rel == "com/android/server/stats/pull/StatsPullAtomService$$ExternalSyntheticLambda5.smali" and (
+            d is None or not rx.search(open(os.path.join(root, d, rel)).read())
+        ):
+            rel = "com/android/server/stats/pull/StatsPullAtomService.smali"
+            d = find(root, rel)
+        if d is None and rel == "com/android/server/connectivity/NetdEventListenerService$2.smali":
+            if not any(
+                "getL4sDeveloperOption(" in open(os.path.join(r, fn)).read()
+                for r, _, fs in os.walk(root) for fn in fs if fn.endswith(".smali")
+            ):
+                continue
         if d is None:
             sys.exit(f"a16_connectivity_compat: {rel} not in this {kind} jar")
         path = os.path.join(root, d, rel)
@@ -150,6 +164,12 @@ def main():
             files[path] = [d, src, 0]
         d, src, n = files[path]
         found = list(rx.finditer(src))
+        if len(found) == 0 and rel in (
+            "com/android/server/connectivity/IpConnectivityMetrics.smali",
+            "com/android/server/connectivity/NetdEventListenerService.smali",
+        ) and "L4sDeveloperOption(" not in src:
+            del files[path]
+            continue
         if len(found) != want:
             sys.exit(f"a16_connectivity_compat: {rel}: {len(found)} sites, expected {want}")
         for m in reversed(found):  # from the last site back, so earlier offsets stay right

@@ -33,12 +33,18 @@ class StageAuditTest {
         val p = StageAudit.audit(tester)
         assertTrue("audit problems:\n${p.joinToString("\n")}", p.isEmpty())
         val listed = Regex("""(?m)^A17_ON_A16_PROFILES="([^"]*)"$""").find(script)!!.groupValues[1].split(' ').toSet()
+        val listedInfx = Regex("""(?m)^A17_ON_A16_INFX_PROFILES="([^"]*)"$""").find(script)!!.groupValues[1].split(' ').toSet()
         val stable = Profiles.STABLE.associateBy { it.id }
         val added = Profiles.withOneUi95OnA16(Profiles.STABLE).flatMap { pr ->
             pr.choices.filter { c -> stable.getValue(pr.id).choices.none { it == c } }.map { Triple(pr.id, it.imageId, it.packageSetId) }
         }
-        assertEquals(added.map { it.first }.toSet(), listed)
-        assertTrue(added.all { it.second == Images.ID_ONEUI95 && it.third == PackageSets.ID_ONEUI95_A16 })
+        val addedOneUi = added.filter { it.second == Images.ID_ONEUI95 }
+        val addedInfx = added.filter { it.second == Images.ID_INFINITYX }
+        assertEquals(added.size, addedOneUi.size + addedInfx.size)
+        assertEquals(addedOneUi.map { it.first }.toSet(), listed)
+        assertEquals(addedInfx.map { it.first }.toSet(), listedInfx)
+        assertTrue(addedOneUi.all { it.third == PackageSets.ID_ONEUI95_A16 })
+        assertTrue(addedInfx.all { it.third == PackageSets.ID_INFINITYX_A16 })
         assertTrue(script.contains("        *) a17_on_a16_set \"\$1\" \"\$2\" ;;\n"))
         assertTrue(script.contains("    [ \"\$ONEOS_A17_ON_A16\" = 1 ] && [ \"\$2\" = oneui95-s948b ] && in_list \"\$1\" \"\$A17_ON_A16_PROFILES\" || return 1\n    echo oneui95-a16\n"))
     }

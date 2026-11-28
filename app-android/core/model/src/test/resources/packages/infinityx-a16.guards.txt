@@ -1,0 +1,19 @@
+# framework overlays built for infinityx-a16 (Project Infinity-X Android 17 on One UI 8) with the storage, installd, power, sysrq, weaver, biometric, gatekeeper, pdb, apexd, appid15000, nousers, nativeservices, wipesecrets and ksuappid guards, and the secims carve-out (com.sec.imsservice kept in android.uid.system from /system_ext/priv-app/OneOSSecIms only)
+# installd and IOemNetd codes read on the phone at runtime (OneOSInstalldCodes, OneOSOemNetdCodes): One UI 9.0 and 9.5 phones
+# guest storage bridge: OneOSStorageHelper routes Settings app/user/external size and Clear Data/Cache to oneos_storaged (patches/guest_storage_bridge.py)
+# charger power from Samsung's charging_type in BatteryService (OneOSChargePower)
+# biometric-remove guard: services_patched.jar never removes a fingerprint or face template (patches/guest_no_biometric_remove.py); a finger on the optical sensor from the touch panel (patches/guest_fp_touchwatch.py)
+# in-display fingerprint place: FingerprintProvider.getWorkaroundSensorProps asks OneOSUdfps (/data/system/oneos_udfps, from the phone's sysfs) first (patches/guest_udfps_location.py)
+# optical sensor: FingerprintProvider.onPointerDown/onPointerUp light the panel's local HBM and send Samsung's touch request first (patches/guest_seh_touch.py, OneOSSehTouch; /data/system/oneos_fp_lhbm)
+# guest vold name: gvld (vold_patched, service.incremental_patched.so and services_patched.jar)
+# guest local lock with Gatekeeper HAT placeholder (patches/guest_local_lock.py, guest_local_lock_hat.py); software hotword capture blocked on mock STHAL (patches/guest_no_sw_hotword.py); thermal blur kept on (patches/guest_blur_no_thermal.py)
+# telephony-common_patched.jar: SMS service centre as international number (patches/guest_smsc_international.py); SEND_SMS error 66 counted as sent (patches/guest_sms_invalid_response.py); QoS filter A16 fallback (patches/a16_connectivity_compat.py)
+# infinityx-a16 (Android 17 on One UI 8 SDK 36): services_patched.jar, framework_patched.jar and telephony-common_patched.jar with Android 16 connectivity fallbacks (patches/a16_connectivity_compat.py), ConnectivityCallListenerService stub (patches/a16_call_listener_stub.py), boot-phase attribution guard (patches/a16_boot_phase_attribution.py), and device-policy metadata init without boot image (patches/policy_metadata_init.py); One UI 8 camera codes pre-staged in framework_patched_oneui8.jar + libcamera_client_patched.so (default off via ONEOS_A16_CAMERA=0 -> config.disable_cameraservice=true)
+a1a2e5358c736d4b284da19734ab673576bfed7b066e9d0f769dc728627fa6e1  services_patched.jar
+fd07875f8a399a1875409c5790a949dffd2f67f231f28f9cd7c385391834016b  oplus-services_patched.jar
+654dcfa788bcfde4fc539935ffbcb707a3b0c2001e31b6de27edec5afe5de404  vold_patched
+d853cfa2f60c477a5c5224cf9972665f09a733fa66e659d71f43d521589fceb7  service.incremental_patched.so
+9e9c9c6909461c93a0733845b40ab68e5324b9dbd977a540d8da55378a1fe169  framework_patched.jar
+bfb01bacd7b19f31405bd9158743816304df6093b989fdd2994762d67e026a81  framework_patched_oneui8.jar
+3a03599f40d6408c6b4d578002879d8ffbd7b1cc7d000775105c914a3f607dae  telephony-common_patched.jar
+e86b9882c96421758375dc6a380d512ab905910eb12447fec056faa6b0260bd1  libcamera_client_patched.so
