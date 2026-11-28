@@ -4,6 +4,18 @@ build/
 *.raw
 *.img
 *.img.gz
+# A16-only APEX payloads extracted from Infinity-X (not in upstream remote.txt/sizes.txt; all <33 MB)
+!packages/infinityx-a16/devicelock_payload.img
+!packages/infinityx-a16/ipsec_payload.img
+!packages/infinityx-a16/media.swcodec_payload.img
+!packages/infinityx-a16/media_payload.img
+!packages/infinityx-a16/neuralnetworks_payload.img
+!packages/infinityx-a16/os.statsd_payload.img
+!packages/infinityx-a16/resolv_payload.img
+!packages/infinityx-a16/scheduling_payload.img
+!packages/infinityx-a16/tzdata_payload.img
+!packages/infinityx-a16/uprobestats_payload.img
+!packages/infinityx-a16/uwb_payload.img
 switcher/keystore/
 # Signing material lives outside the repository (~/.oneos-release).
 *.jks
